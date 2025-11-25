@@ -1,7 +1,9 @@
 //! Command-line interface definition.
 
 use clap::{Parser, ValueEnum};
-use saorsa_node::config::{IpVersion, MigrationConfig, NodeConfig, UpgradeChannel, UpgradeConfig};
+use saorsa_node::config::{
+    IpVersion, MigrationConfig, NodeConfig, PaymentConfig, UpgradeChannel, UpgradeConfig,
+};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
@@ -41,6 +43,18 @@ pub struct Cli {
     /// Release channel for upgrades.
     #[arg(long, value_enum, default_value = "stable", env = "SAORSA_UPGRADE_CHANNEL")]
     pub upgrade_channel: CliUpgradeChannel,
+
+    /// Disable payment verification (require payment for all data).
+    #[arg(long)]
+    pub disable_payment_verification: bool,
+
+    /// Bootstrap peers for connecting to autonomi network (for payment verification).
+    #[arg(long, env = "SAORSA_AUTONOMI_BOOTSTRAP")]
+    pub autonomi_bootstrap: Vec<String>,
+
+    /// Cache capacity for verified XorNames.
+    #[arg(long, default_value = "100000", env = "SAORSA_CACHE_CAPACITY")]
+    pub cache_capacity: usize,
 
     /// Log level.
     #[arg(long, default_value = "info", env = "RUST_LOG")]
@@ -106,6 +120,14 @@ impl Cli {
         config.migration = MigrationConfig {
             auto_detect: self.auto_migrate,
             ant_data_path: self.migrate_ant_data,
+        };
+
+        // Payment config
+        config.payment = PaymentConfig {
+            enabled: !self.disable_payment_verification,
+            autonomi_bootstrap: self.autonomi_bootstrap,
+            cache_capacity: self.cache_capacity,
+            ..config.payment
         };
 
         Ok(config)

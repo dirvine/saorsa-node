@@ -156,9 +156,9 @@ impl RunningNode {
                             }
                         }
                         result = monitor.check_for_updates() => {
-                            if let Ok(Some(version)) = result {
+                            if let Ok(Some(upgrade_info)) = result {
                                 let _ = events_tx.send(NodeEvent::UpgradeAvailable {
-                                    version: version.to_string(),
+                                    version: upgrade_info.version.to_string(),
                                 });
                             }
                             // Wait for next check interval

@@ -28,6 +28,10 @@ pub enum Error {
     #[error("migration error: {0}")]
     Migration(String),
 
+    /// Payment error.
+    #[error("payment error: {0}")]
+    Payment(String),
+
     /// Upgrade error.
     #[error("upgrade error: {0}")]
     Upgrade(String),

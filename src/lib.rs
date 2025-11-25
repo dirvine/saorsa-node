@@ -23,7 +23,7 @@
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     let config = NodeConfig::default();
-//!     let node = NodeBuilder::new(config).build().await?;
+//!     let mut node = NodeBuilder::new(config).build().await?;
 //!     node.run().await?;
 //!     Ok(())
 //! }
@@ -39,9 +39,11 @@ pub mod error;
 pub mod event;
 pub mod migration;
 pub mod node;
+pub mod payment;
 pub mod upgrade;
 
 pub use config::NodeConfig;
 pub use error::{Error, Result};
 pub use event::{NodeEvent, NodeEventsChannel};
 pub use node::{NodeBuilder, RunningNode};
+pub use payment::{PaymentStatus, PaymentVerifier, PaymentVerifierConfig};

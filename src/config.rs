@@ -55,6 +55,10 @@ pub struct NodeConfig {
     #[serde(default)]
     pub migration: MigrationConfig,
 
+    /// Payment verification configuration.
+    #[serde(default)]
+    pub payment: PaymentConfig,
+
     /// Log level.
     #[serde(default = "default_log_level")]
     pub log_level: String,
@@ -88,6 +92,60 @@ pub struct MigrationConfig {
     pub ant_data_path: Option<PathBuf>,
 }
 
+/// Payment verification configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PaymentConfig {
+    /// Enable autonomi network verification.
+    /// When enabled, data that exists on autonomi is stored for free.
+    #[serde(default = "default_payment_enabled")]
+    pub enabled: bool,
+
+    /// Bootstrap peers for connecting to the autonomi network.
+    #[serde(default)]
+    pub autonomi_bootstrap: Vec<String>,
+
+    /// Cache capacity for verified XorNames.
+    #[serde(default = "default_cache_capacity")]
+    pub cache_capacity: usize,
+
+    /// Require payment when autonomi lookup fails (fail closed).
+    /// If false, allows free storage on network errors (fail open).
+    #[serde(default = "default_require_payment_on_error")]
+    pub require_payment_on_error: bool,
+
+    /// Query timeout in seconds for autonomi lookups.
+    #[serde(default = "default_query_timeout")]
+    pub query_timeout_secs: u64,
+}
+
+impl Default for PaymentConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_payment_enabled(),
+            autonomi_bootstrap: Vec::new(),
+            cache_capacity: default_cache_capacity(),
+            require_payment_on_error: default_require_payment_on_error(),
+            query_timeout_secs: default_query_timeout(),
+        }
+    }
+}
+
+const fn default_payment_enabled() -> bool {
+    true
+}
+
+const fn default_cache_capacity() -> usize {
+    100_000
+}
+
+const fn default_require_payment_on_error() -> bool {
+    true
+}
+
+const fn default_query_timeout() -> u64 {
+    30
+}
+
 impl Default for NodeConfig {
     fn default() -> Self {
         Self {
@@ -97,6 +155,7 @@ impl Default for NodeConfig {
             bootstrap: Vec::new(),
             upgrade: UpgradeConfig::default(),
             migration: MigrationConfig::default(),
+            payment: PaymentConfig::default(),
             log_level: default_log_level(),
         }
     }

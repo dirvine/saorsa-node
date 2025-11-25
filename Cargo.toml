@@ -23,6 +23,15 @@ path = "src/bin/saorsa-node/main.rs"
 saorsa-core = { path = "../saorsa-core" }
 saorsa-pqc = { path = "../saorsa-pqc" }
 
+# Payment verification - autonomi network lookup + EVM payment
+autonomi = { path = "../autonomi/autonomi" }
+ant-evm = { path = "../autonomi/ant-evm" }
+evmlib = { path = "../autonomi/evmlib" }
+
+# Caching - LRU cache for verified XorNames
+lru = "0.12"
+parking_lot = "0.12"  # Efficient mutex for cache
+
 # Migration: Decrypt ant-node data (read-only)
 aes-gcm-siv = "0.11"
 hkdf = "0.12"
