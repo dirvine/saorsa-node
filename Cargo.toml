@@ -1,0 +1,93 @@
+[package]
+name = "saorsa-node"
+version = "0.1.0"
+edition = "2021"
+authors = ["David Irvine <david.irvine@maidsafe.net>"]
+description = "Pure quantum-proof network node for the Saorsa decentralized network"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/dirvine/saorsa-node"
+keywords = ["p2p", "decentralized", "quantum-safe", "post-quantum", "dht"]
+categories = ["network-programming", "cryptography"]
+rust-version = "1.75"
+
+[lib]
+name = "saorsa_node"
+path = "src/lib.rs"
+
+[[bin]]
+name = "saorsa-node"
+path = "src/bin/saorsa-node/main.rs"
+
+[dependencies]
+# Core (provides EVERYTHING: networking, DHT, security, trust, storage)
+saorsa-core = { path = "../saorsa-core" }
+saorsa-pqc = { path = "../saorsa-pqc" }
+
+# Migration: Decrypt ant-node data (read-only)
+aes-gcm-siv = "0.11"
+hkdf = "0.12"
+sha2 = "0.10"
+
+# Async runtime
+tokio = { version = "1.35", features = ["full", "signal"] }
+futures = "0.3"
+
+# CLI
+clap = { version = "4", features = ["derive", "env"] }
+
+# Configuration
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+directories = "5"
+
+# Auto-upgrade
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+semver = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Error handling
+thiserror = "2"
+color-eyre = "0.6"
+
+# Serialization
+rmp-serde = "1"
+hex = "0.4"
+
+# Utilities
+bytes = "1"
+chrono = { version = "0.4", features = ["serde"] }
+
+[dev-dependencies]
+tempfile = "3"
+tokio-test = "0.4"
+proptest = "1"
+
+[features]
+default = []
+# Enable additional diagnostics for development
+dev = []
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.dev]
+# Faster builds for development
+opt-level = 1
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
+nursery = "warn"
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"

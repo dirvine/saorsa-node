@@ -1,0 +1,227 @@
+# =============================================================================
+# SECURITY-FOCUSED .gitignore for saorsa-node
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# SECRETS AND CREDENTIALS - CRITICAL SECURITY
+# -----------------------------------------------------------------------------
+# Private keys (NEVER commit these)
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.crt
+*.cer
+*.der
+id_rsa*
+id_ed25519*
+id_dsa*
+*.priv
+*_private*
+*_secret*
+
+# Environment files with secrets
+.env
+.env.*
+!.env.example
+.envrc
+*.env.local
+
+# Credential files
+credentials.json
+credentials.yaml
+credentials.yml
+secrets.json
+secrets.yaml
+secrets.yml
+*credentials*
+*secret*
+!*secret*.rs
+!*credentials*.rs
+
+# API keys and tokens
+*.token
+api_key*
+auth_token*
+
+# SSH keys
+.ssh/
+
+# GPG keys
+*.gpg
+*.asc
+
+# ML-DSA signing keys (our quantum-proof keys)
+*.mldsa
+signing_key*
+release_key*
+
+# -----------------------------------------------------------------------------
+# RUST BUILD ARTIFACTS
+# -----------------------------------------------------------------------------
+/target/
+**/*.rs.bk
+Cargo.lock
+*.rlib
+*.rmeta
+
+# Debug artifacts
+*.dSYM/
+*.su
+*.idb
+*.pdb
+
+# -----------------------------------------------------------------------------
+# IDE AND EDITOR FILES
+# -----------------------------------------------------------------------------
+# VSCode
+.vscode/
+*.code-workspace
+
+# JetBrains IDEs
+.idea/
+*.iml
+*.iws
+
+# Vim
+*.swp
+*.swo
+*~
+.netrwhist
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# Sublime Text
+*.sublime-workspace
+*.sublime-project
+
+# -----------------------------------------------------------------------------
+# OPERATING SYSTEM FILES
+# -----------------------------------------------------------------------------
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# Linux
+*~
+.directory
+.Trash-*
+
+# -----------------------------------------------------------------------------
+# NODE DATA AND RUNTIME
+# -----------------------------------------------------------------------------
+# Node data directories (may contain keys)
+node_data/
+data/
+.saorsa/
+.ant/
+.antnode/
+
+# Runtime files
+*.pid
+*.sock
+*.socket
+
+# Log files (may contain sensitive info)
+*.log
+logs/
+log/
+
+# Crash dumps and core files
+core
+core.*
+*.dump
+*.stackdump
+
+# -----------------------------------------------------------------------------
+# TESTING AND COVERAGE
+# -----------------------------------------------------------------------------
+# Coverage reports
+coverage/
+*.gcov
+*.gcno
+*.gcda
+tarpaulin-report.html
+tarpaulin-report.json
+lcov.info
+cobertura.xml
+
+# Test artifacts
+test_data/
+tmp/
+temp/
+
+# Benchmark results
+criterion/
+.criterion/
+
+# Property testing artifacts
+proptest-regressions/
+
+# -----------------------------------------------------------------------------
+# DOCUMENTATION AND BUILD
+# -----------------------------------------------------------------------------
+# Generated documentation
+/doc/
+/docs/api/
+
+# Build artifacts
+/dist/
+/build/
+/out/
+
+# -----------------------------------------------------------------------------
+# MISCELLANEOUS
+# -----------------------------------------------------------------------------
+# Backup files
+*.bak
+*.backup
+*.orig
+
+# Archives (may contain sensitive data)
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.rar
+*.7z
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Binary files (use releases instead)
+/bin/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Package manager caches
+.cargo/
+!.cargo/config.toml
+
+# Claude/AI assistant files
+.claude/
