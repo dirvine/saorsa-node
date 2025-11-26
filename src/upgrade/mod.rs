@@ -4,11 +4,14 @@
 //! - Polling GitHub releases for new versions
 //! - Verifying ML-DSA-65 signatures on binaries
 //! - Replacing the running binary with rollback support
+//! - Staged rollout to prevent mass network restarts
 
 mod monitor;
+mod rollout;
 mod signature;
 
 pub use monitor::{find_platform_asset, version_from_tag, Asset, GitHubRelease, UpgradeMonitor};
+pub use rollout::StagedRollout;
 pub use signature::{
     verify_binary_signature, verify_binary_signature_with_key, verify_from_file,
     verify_from_file_with_key, PUBLIC_KEY_SIZE, SIGNATURE_SIZE, SIGNING_CONTEXT,

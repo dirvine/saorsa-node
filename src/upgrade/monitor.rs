@@ -5,14 +5,16 @@
 //! - Filter releases by channel (stable/beta)
 //! - Find platform-specific binary assets
 //! - Detect available upgrades
+//! - Staged rollout with deterministic delays
 
 use crate::config::UpgradeChannel;
 use crate::error::{Error, Result};
+use crate::upgrade::rollout::StagedRollout;
 use crate::upgrade::UpgradeInfo;
 use semver::Version;
 use serde::Deserialize;
-use std::time::Duration;
-use tracing::{debug, info};
+use std::time::{Duration, Instant};
+use tracing::{debug, info, warn};
 
 /// GitHub release API response.
 #[derive(Debug, Deserialize)]
@@ -50,6 +52,12 @@ pub struct UpgradeMonitor {
     current_version: Version,
     /// HTTP client for GitHub API requests.
     client: reqwest::Client,
+    /// Staged rollout calculator (optional).
+    staged_rollout: Option<StagedRollout>,
+    /// When the current pending upgrade was first detected.
+    pending_upgrade_detected: Option<Instant>,
+    /// The version of the pending upgrade (for tracking rollout state).
+    pending_upgrade_version: Option<Version>,
 }
 
 impl UpgradeMonitor {
@@ -77,7 +85,27 @@ impl UpgradeMonitor {
             check_interval: Duration::from_secs(check_interval_hours * 3600),
             current_version,
             client,
+            staged_rollout: None,
+            pending_upgrade_detected: None,
+            pending_upgrade_version: None,
         }
+    }
+
+    /// Configure staged rollout for this monitor.
+    ///
+    /// # Arguments
+    ///
+    /// * `node_id` - The node's unique identifier for deterministic delay calculation
+    /// * `max_delay_hours` - Maximum rollout window (0 to disable)
+    pub fn with_staged_rollout(mut self, node_id: &[u8], max_delay_hours: u64) -> Self {
+        if max_delay_hours > 0 {
+            self.staged_rollout = Some(StagedRollout::new(node_id, max_delay_hours));
+            info!(
+                "Staged rollout enabled: {} hour window",
+                max_delay_hours
+            );
+        }
+        self
     }
 
     /// Create a monitor with a custom current version (for testing).
@@ -101,6 +129,9 @@ impl UpgradeMonitor {
             check_interval: Duration::from_secs(check_interval_hours * 3600),
             current_version,
             client,
+            staged_rollout: None,
+            pending_upgrade_detected: None,
+            pending_upgrade_version: None,
         }
     }
 
@@ -136,6 +167,10 @@ impl UpgradeMonitor {
 
     /// Check GitHub for available updates.
     ///
+    /// This method only checks for available updates, it does not respect
+    /// staged rollout delays. Use [`check_for_ready_upgrade`] for staged rollout
+    /// aware upgrade checking.
+    ///
     /// # Errors
     ///
     /// Returns an error if the GitHub API request fails.
@@ -168,6 +203,112 @@ impl UpgradeMonitor {
             .map_err(|e| Error::Network(format!("Failed to parse release: {e}")))?;
 
         Ok(self.process_release(&release))
+    }
+
+    /// Check for available updates with staged rollout awareness.
+    ///
+    /// This method:
+    /// 1. Checks GitHub for available updates
+    /// 2. If staged rollout is enabled and an upgrade is found:
+    ///    - Starts tracking the upgrade detection time
+    ///    - Returns `None` until the calculated delay has passed
+    ///    - Returns the upgrade info once the node is ready to apply it
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the GitHub API request fails.
+    pub async fn check_for_ready_upgrade(&mut self) -> Result<Option<UpgradeInfo>> {
+        let upgrade_info = self.check_for_updates().await?;
+
+        let Some(info) = upgrade_info else {
+            // No upgrade available - reset tracking state
+            self.pending_upgrade_detected = None;
+            self.pending_upgrade_version = None;
+            return Ok(None);
+        };
+
+        // If staged rollout is not enabled, return immediately
+        let Some(ref rollout) = self.staged_rollout else {
+            return Ok(Some(info));
+        };
+
+        // Check if this is a new version or we're still tracking the same one
+        let is_new_version = self
+            .pending_upgrade_version
+            .as_ref()
+            .map_or(true, |v| *v != info.version);
+
+        if is_new_version {
+            // New version detected - start rollout timer
+            self.pending_upgrade_detected = Some(Instant::now());
+            self.pending_upgrade_version = Some(info.version.clone());
+
+            let delay = rollout.calculate_delay_for_version(&info.version);
+            info!(
+                "New version {} detected. Staged rollout delay: {}h {}m",
+                info.version,
+                delay.as_secs() / 3600,
+                (delay.as_secs() % 3600) / 60
+            );
+        }
+
+        // Calculate if we're past the rollout delay
+        let Some(detected_at) = self.pending_upgrade_detected else {
+            // Should not happen, but handle gracefully
+            warn!("Pending upgrade detected but no timestamp recorded");
+            return Ok(Some(info));
+        };
+
+        let delay = rollout.calculate_delay_for_version(&info.version);
+        let elapsed = detected_at.elapsed();
+
+        if elapsed >= delay {
+            info!(
+                "Staged rollout delay elapsed. Ready to upgrade to version {}",
+                info.version
+            );
+            Ok(Some(info))
+        } else {
+            let remaining = delay - elapsed;
+            debug!(
+                "Staged rollout: {}h {}m remaining before upgrade to {}",
+                remaining.as_secs() / 3600,
+                (remaining.as_secs() % 3600) / 60,
+                info.version
+            );
+            Ok(None)
+        }
+    }
+
+    /// Get the remaining time until this node should upgrade.
+    ///
+    /// Returns `None` if no upgrade is pending or staged rollout is disabled.
+    #[must_use]
+    pub fn time_until_upgrade(&self) -> Option<Duration> {
+        let rollout = self.staged_rollout.as_ref()?;
+        let version = self.pending_upgrade_version.as_ref()?;
+        let detected_at = self.pending_upgrade_detected?;
+
+        let delay = rollout.calculate_delay_for_version(version);
+        let elapsed = detected_at.elapsed();
+
+        if elapsed >= delay {
+            Some(Duration::ZERO)
+        } else {
+            Some(delay - elapsed)
+        }
+    }
+
+    /// Check if staged rollout is enabled.
+    #[must_use]
+    pub fn has_staged_rollout(&self) -> bool {
+        self.staged_rollout.is_some()
+    }
+
+    /// Get the pending upgrade version, if any.
+    #[must_use]
+    pub fn pending_version(&self) -> Option<&Version> {
+        self.pending_upgrade_version.as_ref()
     }
 
     /// Process a GitHub release and determine if an upgrade is available.
@@ -221,6 +362,7 @@ pub fn version_from_tag(tag: &str) -> Option<Version> {
 /// Find the appropriate binary asset for the current platform.
 ///
 /// Looks for assets matching the current OS and architecture.
+/// On Windows, also looks for `.exe` suffixed binaries.
 #[must_use]
 pub fn find_platform_asset(assets: &[Asset]) -> Option<&Asset> {
     let arch = std::env::consts::ARCH;
@@ -233,13 +375,37 @@ pub fn find_platform_asset(assets: &[Asset]) -> Option<&Asset> {
     for pattern in &patterns {
         if let Some(asset) = assets
             .iter()
-            .find(|a| a.name.contains(pattern) && !a.name.to_lowercase().ends_with(".sig"))
+            .find(|a| a.name.contains(pattern) && is_binary_asset(&a.name))
         {
             return Some(asset);
         }
     }
 
     None
+}
+
+/// Check if an asset name represents a binary (not a signature or other artifact).
+fn is_binary_asset(name: &str) -> bool {
+    let lower = name.to_lowercase();
+
+    // Exclude signatures and other non-binary files
+    if lower.ends_with(".sig")
+        || lower.ends_with(".sha256")
+        || lower.ends_with(".md5")
+        || lower.ends_with(".txt")
+        || lower.ends_with(".md")
+    {
+        return false;
+    }
+
+    // On Windows, prefer .exe files
+    #[cfg(windows)]
+    if !lower.ends_with(".exe") {
+        // On Windows, only consider .exe files as binaries
+        return false;
+    }
+
+    true
 }
 
 /// Build platform-specific search patterns.
@@ -413,6 +579,21 @@ mod tests {
         let asset = asset.unwrap();
         // Should not be a .sig file
         assert!(!asset.name.to_lowercase().ends_with(".sig"));
+    }
+
+    /// Test: is_binary_asset correctly identifies binaries
+    #[test]
+    fn test_is_binary_asset() {
+        // Binary files should be identified
+        assert!(is_binary_asset("saorsa-node-x86_64-linux"));
+        assert!(is_binary_asset("saorsa-node-aarch64-darwin"));
+
+        // Signature and metadata files should be excluded
+        assert!(!is_binary_asset("saorsa-node.sig"));
+        assert!(!is_binary_asset("saorsa-node.sha256"));
+        assert!(!is_binary_asset("saorsa-node.md5"));
+        assert!(!is_binary_asset("RELEASE_NOTES.txt"));
+        assert!(!is_binary_asset("README.md"));
     }
 
     /// Test 10: Monitor check interval

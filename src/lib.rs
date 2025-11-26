@@ -34,6 +34,7 @@
 #![warn(clippy::all)]
 #![warn(clippy::pedantic)]
 
+pub mod client;
 pub mod config;
 pub mod error;
 pub mod event;
@@ -42,6 +43,7 @@ pub mod node;
 pub mod payment;
 pub mod upgrade;
 
+pub use client::{HybridClient, HybridConfig, HybridStats};
 pub use config::NodeConfig;
 pub use error::{Error, Result};
 pub use event::{NodeEvent, NodeEventsChannel};

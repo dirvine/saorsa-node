@@ -18,6 +18,10 @@ path = "src/lib.rs"
 name = "saorsa-node"
 path = "src/bin/saorsa-node/main.rs"
 
+[[bin]]
+name = "saorsa-keygen"
+path = "src/bin/keygen.rs"
+
 [dependencies]
 # Core (provides EVERYTHING: networking, DHT, security, trust, storage)
 saorsa-core = { path = "../saorsa-core" }

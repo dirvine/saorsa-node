@@ -82,6 +82,16 @@ pub struct UpgradeConfig {
     /// GitHub repository in "owner/repo" format for release monitoring.
     #[serde(default = "default_github_repo")]
     pub github_repo: String,
+
+    /// Staged rollout window in hours.
+    ///
+    /// When a new version is detected, each node waits a deterministic delay
+    /// based on its node ID before applying the upgrade. This prevents mass
+    /// restarts and ensures network stability during upgrades.
+    ///
+    /// Set to 0 to disable staged rollout (apply upgrades immediately).
+    #[serde(default = "default_staged_rollout_hours")]
+    pub staged_rollout_hours: u64,
 }
 
 /// Migration configuration.
@@ -172,6 +182,7 @@ impl Default for UpgradeConfig {
             channel: UpgradeChannel::default(),
             check_interval_hours: default_check_interval(),
             github_repo: default_github_repo(),
+            staged_rollout_hours: default_staged_rollout_hours(),
         }
     }
 }
@@ -192,6 +203,10 @@ fn default_log_level() -> String {
 
 const fn default_check_interval() -> u64 {
     1 // 1 hour
+}
+
+const fn default_staged_rollout_hours() -> u64 {
+    24 // 24 hour window for staged rollout
 }
 
 impl NodeConfig {
