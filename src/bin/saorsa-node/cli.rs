@@ -52,13 +52,13 @@ pub struct Cli {
     #[arg(long, env = "SAORSA_AUTONOMI_BOOTSTRAP")]
     pub autonomi_bootstrap: Vec<String>,
 
-    /// Cache capacity for verified XorNames.
+    /// Cache capacity for verified `XorName` values.
     #[arg(long, default_value = "100000", env = "SAORSA_CACHE_CAPACITY")]
     pub cache_capacity: usize,
 
     /// Log level.
-    #[arg(long, default_value = "info", env = "RUST_LOG")]
-    pub log_level: String,
+    #[arg(long, value_enum, default_value = "info", env = "RUST_LOG")]
+    pub log_level: CliLogLevel,
 
     /// Path to configuration file.
     #[arg(long, short)]
@@ -85,8 +85,24 @@ pub enum CliUpgradeChannel {
     Beta,
 }
 
+/// Log level CLI enum.
+#[derive(Debug, Clone, Copy, ValueEnum, Default)]
+pub enum CliLogLevel {
+    /// Error messages only.
+    Error,
+    /// Warnings and errors.
+    Warn,
+    /// Informational messages (default).
+    #[default]
+    Info,
+    /// Debug messages.
+    Debug,
+    /// Trace messages (verbose).
+    Trace,
+}
+
 impl Cli {
-    /// Convert CLI arguments into a NodeConfig.
+    /// Convert CLI arguments into a `NodeConfig`.
     ///
     /// # Errors
     ///
@@ -107,7 +123,7 @@ impl Cli {
         config.port = self.port;
         config.ip_version = self.ip_version.into();
         config.bootstrap = self.bootstrap;
-        config.log_level = self.log_level;
+        config.log_level = self.log_level.into();
 
         // Upgrade config
         config.upgrade = UpgradeConfig {
@@ -137,9 +153,9 @@ impl Cli {
 impl From<CliIpVersion> for IpVersion {
     fn from(v: CliIpVersion) -> Self {
         match v {
-            CliIpVersion::Ipv4 => IpVersion::Ipv4,
-            CliIpVersion::Ipv6 => IpVersion::Ipv6,
-            CliIpVersion::Dual => IpVersion::Dual,
+            CliIpVersion::Ipv4 => Self::Ipv4,
+            CliIpVersion::Ipv6 => Self::Ipv6,
+            CliIpVersion::Dual => Self::Dual,
         }
     }
 }
@@ -147,8 +163,20 @@ impl From<CliIpVersion> for IpVersion {
 impl From<CliUpgradeChannel> for UpgradeChannel {
     fn from(c: CliUpgradeChannel) -> Self {
         match c {
-            CliUpgradeChannel::Stable => UpgradeChannel::Stable,
-            CliUpgradeChannel::Beta => UpgradeChannel::Beta,
+            CliUpgradeChannel::Stable => Self::Stable,
+            CliUpgradeChannel::Beta => Self::Beta,
+        }
+    }
+}
+
+impl From<CliLogLevel> for String {
+    fn from(level: CliLogLevel) -> Self {
+        match level {
+            CliLogLevel::Error => "error".to_string(),
+            CliLogLevel::Warn => "warn".to_string(),
+            CliLogLevel::Info => "info".to_string(),
+            CliLogLevel::Debug => "debug".to_string(),
+            CliLogLevel::Trace => "trace".to_string(),
         }
     }
 }

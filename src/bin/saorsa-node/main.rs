@@ -4,7 +4,7 @@ mod cli;
 
 use clap::Parser;
 use cli::Cli;
-use saorsa_node::{NodeBuilder, NodeConfig};
+use saorsa_node::NodeBuilder;
 use tracing::info;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
@@ -17,8 +17,9 @@ async fn main() -> color_eyre::Result<()> {
     let cli = Cli::parse();
 
     // Initialize tracing
+    let log_level: String = cli.log_level.into();
     let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(&cli.log_level));
+        .unwrap_or_else(|_| EnvFilter::new(&log_level));
 
     tracing_subscriber::registry()
         .with(fmt::layer())

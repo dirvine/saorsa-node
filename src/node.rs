@@ -1,14 +1,19 @@
-//! Node implementation - thin wrapper around saorsa-core's NetworkCoordinator.
+//! Node implementation - thin wrapper around saorsa-core's `P2PNode`.
 
-use crate::config::NodeConfig;
+use crate::config::{IpVersion, NodeConfig};
 use crate::error::{Error, Result};
 use crate::event::{create_event_channel, NodeEvent, NodeEventsChannel, NodeEventsSender};
 use crate::migration::AntDataMigrator;
 use crate::upgrade::UpgradeMonitor;
+use saorsa_core::{NodeConfig as CoreNodeConfig, P2PNode};
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::watch;
-use tracing::{info, warn};
+use tracing::{debug, error, info, warn};
+
+#[cfg(unix)]
+use tokio::signal::unix::{signal, SignalKind};
 
 /// Builder for constructing a saorsa node.
 pub struct NodeBuilder {
@@ -39,17 +44,19 @@ impl NodeBuilder {
         // Create event channel
         let (events_tx, events_rx) = create_event_channel();
 
-        // TODO: Initialize saorsa-core's NetworkCoordinator
-        // This will be implemented when we integrate with saorsa-core
-        //
-        // let network_config = saorsa_core::messaging::NetworkConfig::default();
-        // let identity = saorsa_core::identity::NodeIdentity::generate()?;
-        // let coordinator = NetworkCoordinator::new(network_config, identity).await?;
+        // Convert our config to saorsa-core's config
+        let core_config = Self::build_core_config(&self.config)?;
+        debug!("Core config: {:?}", core_config);
+
+        // Initialize saorsa-core's P2PNode
+        let p2p_node = P2PNode::new(core_config)
+            .await
+            .map_err(|e| Error::Startup(format!("Failed to create P2P node: {e}")))?;
 
         // Create upgrade monitor if enabled
         let upgrade_monitor = if self.config.upgrade.enabled {
             Some(Arc::new(UpgradeMonitor::new(
-                "dirvine/saorsa-node".to_string(),
+                self.config.upgrade.github_repo.clone(),
                 self.config.upgrade.channel,
                 self.config.upgrade.check_interval_hours,
             )))
@@ -68,6 +75,7 @@ impl NodeBuilder {
 
         let node = RunningNode {
             config: self.config,
+            p2p_node: Arc::new(p2p_node),
             shutdown_tx,
             shutdown_rx,
             events_tx,
@@ -78,11 +86,44 @@ impl NodeBuilder {
 
         Ok(node)
     }
+
+    /// Build the saorsa-core `NodeConfig` from our config.
+    fn build_core_config(config: &NodeConfig) -> Result<CoreNodeConfig> {
+        // Determine listen address based on port and IP version
+        let listen_addr: SocketAddr = match config.ip_version {
+            IpVersion::Ipv4 | IpVersion::Dual => {
+                format!("0.0.0.0:{}", config.port)
+                    .parse()
+                    .map_err(|e| Error::Config(format!("Invalid listen address: {e}")))?
+            }
+            IpVersion::Ipv6 => {
+                format!("[::]:{}", config.port)
+                    .parse()
+                    .map_err(|e| Error::Config(format!("Invalid listen address: {e}")))?
+            }
+        };
+
+        let mut core_config = CoreNodeConfig::new()
+            .map_err(|e| Error::Config(format!("Failed to create core config: {e}")))?;
+
+        // Set listen address
+        core_config.listen_addr = listen_addr;
+        core_config.listen_addrs = vec![listen_addr];
+
+        // Enable IPv6 if configured
+        core_config.enable_ipv6 = matches!(config.ip_version, IpVersion::Ipv6 | IpVersion::Dual);
+
+        // Add bootstrap peers
+        core_config.bootstrap_peers.clone_from(&config.bootstrap);
+
+        Ok(core_config)
+    }
 }
 
 /// A running saorsa node.
 pub struct RunningNode {
     config: NodeConfig,
+    p2p_node: Arc<P2PNode>,
     shutdown_tx: watch::Sender<bool>,
     shutdown_rx: watch::Receiver<bool>,
     events_tx: NodeEventsSender,
@@ -119,8 +160,21 @@ impl RunningNode {
     pub async fn run(&mut self) -> Result<()> {
         info!("Starting saorsa-node");
 
+        // Start the P2P node
+        self.p2p_node
+            .start()
+            .await
+            .map_err(|e| Error::Startup(format!("Failed to start P2P node: {e}")))?;
+
+        info!(
+            "P2P node started, listening on {:?}",
+            self.p2p_node.listen_addrs().await
+        );
+
         // Emit started event
-        let _ = self.events_tx.send(NodeEvent::Started);
+        if let Err(e) = self.events_tx.send(NodeEvent::Started) {
+            warn!("Failed to send Started event: {e}");
+        }
 
         // Run migration if configured
         if let Some(ref migrator) = self.migrator {
@@ -128,15 +182,19 @@ impl RunningNode {
             match migrator.migrate(&self.events_tx).await {
                 Ok(stats) => {
                     info!("Migration complete: {} records migrated", stats.migrated);
-                    let _ = self.events_tx.send(NodeEvent::MigrationComplete {
+                    if let Err(e) = self.events_tx.send(NodeEvent::MigrationComplete {
                         total: stats.migrated,
-                    });
+                    }) {
+                        warn!("Failed to send MigrationComplete event: {e}");
+                    }
                 }
                 Err(e) => {
-                    warn!("Migration failed: {}", e);
-                    let _ = self.events_tx.send(NodeEvent::Error {
+                    error!("Migration failed: {}", e);
+                    if let Err(send_err) = self.events_tx.send(NodeEvent::Error {
                         message: format!("Migration failed: {e}"),
-                    });
+                    }) {
+                        warn!("Failed to send Error event: {send_err}");
+                    }
                 }
             }
         }
@@ -157,9 +215,11 @@ impl RunningNode {
                         }
                         result = monitor.check_for_updates() => {
                             if let Ok(Some(upgrade_info)) = result {
-                                let _ = events_tx.send(NodeEvent::UpgradeAvailable {
+                                if let Err(e) = events_tx.send(NodeEvent::UpgradeAvailable {
                                     version: upgrade_info.version.to_string(),
-                                });
+                                }) {
+                                    warn!("Failed to send UpgradeAvailable event: {e}");
+                                }
                             }
                             // Wait for next check interval
                             tokio::time::sleep(monitor.check_interval()).await;
@@ -169,9 +229,29 @@ impl RunningNode {
             });
         }
 
-        // TODO: Run the main node loop via saorsa-core's NetworkCoordinator
-        // For now, just wait for shutdown signal
         info!("Node running, waiting for shutdown signal");
+
+        // Run the main event loop with signal handling
+        self.run_event_loop().await?;
+
+        // Shutdown P2P node
+        info!("Shutting down P2P node...");
+        if let Err(e) = self.p2p_node.shutdown().await {
+            warn!("Error during P2P node shutdown: {e}");
+        }
+
+        if let Err(e) = self.events_tx.send(NodeEvent::ShuttingDown) {
+            warn!("Failed to send ShuttingDown event: {e}");
+        }
+        info!("Node shutdown complete");
+        Ok(())
+    }
+
+    /// Run the main event loop, handling shutdown and signals.
+    #[cfg(unix)]
+    async fn run_event_loop(&mut self) -> Result<()> {
+        let mut sigterm = signal(SignalKind::terminate())?;
+        let mut sighup = signal(SignalKind::hangup())?;
 
         loop {
             tokio::select! {
@@ -182,20 +262,49 @@ impl RunningNode {
                     }
                 }
                 _ = tokio::signal::ctrl_c() => {
-                    info!("Ctrl-C received, initiating shutdown");
+                    info!("Received SIGINT (Ctrl-C), initiating shutdown");
+                    self.shutdown();
+                    break;
+                }
+                _ = sigterm.recv() => {
+                    info!("Received SIGTERM, initiating shutdown");
+                    self.shutdown();
+                    break;
+                }
+                _ = sighup.recv() => {
+                    info!("Received SIGHUP, could reload config here");
+                    // TODO: Implement config reload on SIGHUP
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Run the main event loop, handling shutdown signals (non-Unix version).
+    #[cfg(not(unix))]
+    async fn run_event_loop(&mut self) -> Result<()> {
+        loop {
+            tokio::select! {
+                _ = self.shutdown_rx.changed() => {
+                    if *self.shutdown_rx.borrow() {
+                        info!("Shutdown signal received");
+                        break;
+                    }
+                }
+                _ = tokio::signal::ctrl_c() => {
+                    info!("Received Ctrl-C, initiating shutdown");
                     self.shutdown();
                     break;
                 }
             }
         }
-
-        let _ = self.events_tx.send(NodeEvent::ShuttingDown);
-        info!("Node shutdown complete");
         Ok(())
     }
 
     /// Request the node to shut down.
     pub fn shutdown(&self) {
-        let _ = self.shutdown_tx.send(true);
+        if let Err(e) = self.shutdown_tx.send(true) {
+            warn!("Failed to send shutdown signal: {e}");
+        }
     }
 }

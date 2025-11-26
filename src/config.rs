@@ -78,10 +78,14 @@ pub struct UpgradeConfig {
     /// Check interval in hours.
     #[serde(default = "default_check_interval")]
     pub check_interval_hours: u64,
+
+    /// GitHub repository in "owner/repo" format for release monitoring.
+    #[serde(default = "default_github_repo")]
+    pub github_repo: String,
 }
 
 /// Migration configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MigrationConfig {
     /// Auto-detect ant-node data directories.
     #[serde(default)]
@@ -104,7 +108,7 @@ pub struct PaymentConfig {
     #[serde(default)]
     pub autonomi_bootstrap: Vec<String>,
 
-    /// Cache capacity for verified XorNames.
+    /// Cache capacity for verified `XorNames`.
     #[serde(default = "default_cache_capacity")]
     pub cache_capacity: usize,
 
@@ -167,23 +171,19 @@ impl Default for UpgradeConfig {
             enabled: false,
             channel: UpgradeChannel::default(),
             check_interval_hours: default_check_interval(),
+            github_repo: default_github_repo(),
         }
     }
 }
 
-impl Default for MigrationConfig {
-    fn default() -> Self {
-        Self {
-            auto_detect: false,
-            ant_data_path: None,
-        }
-    }
+fn default_github_repo() -> String {
+    "dirvine/saorsa-node".to_string()
 }
+
 
 fn default_root_dir() -> PathBuf {
     directories::ProjectDirs::from("", "", "saorsa")
-        .map(|dirs| dirs.data_dir().to_path_buf())
-        .unwrap_or_else(|| PathBuf::from(".saorsa"))
+        .map_or_else(|| PathBuf::from(".saorsa"), |dirs| dirs.data_dir().to_path_buf())
 }
 
 fn default_log_level() -> String {

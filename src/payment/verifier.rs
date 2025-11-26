@@ -5,15 +5,36 @@
 use crate::error::{Error, Result};
 use crate::payment::autonomi_verifier::{AutonomVerifier, AutonomVerifierConfig};
 use crate::payment::cache::{VerifiedCache, XorName};
-use std::time::Duration;
+use ant_evm::ProofOfPayment;
+use evmlib::Network as EvmNetwork;
 use tracing::{debug, info, warn};
+
+/// Configuration for EVM payment verification.
+#[derive(Debug, Clone)]
+pub struct EvmVerifierConfig {
+    /// EVM network to use (Arbitrum One, Arbitrum Sepolia, etc.)
+    pub network: EvmNetwork,
+    /// Whether EVM verification is enabled.
+    pub enabled: bool,
+}
+
+impl Default for EvmVerifierConfig {
+    fn default() -> Self {
+        Self {
+            network: EvmNetwork::ArbitrumOne,
+            enabled: true,
+        }
+    }
+}
 
 /// Configuration for the payment verifier.
 #[derive(Debug, Clone)]
 pub struct PaymentVerifierConfig {
     /// Autonomi verifier configuration.
     pub autonomi: AutonomVerifierConfig,
-    /// Cache capacity (number of XorNames to cache).
+    /// EVM verifier configuration.
+    pub evm: EvmVerifierConfig,
+    /// Cache capacity (number of `XorName` values to cache).
     pub cache_capacity: usize,
     /// Whether to require payment on autonomi lookup failure.
     pub require_payment_on_error: bool,
@@ -23,6 +44,7 @@ impl Default for PaymentVerifierConfig {
     fn default() -> Self {
         Self {
             autonomi: AutonomVerifierConfig::default(),
+            evm: EvmVerifierConfig::default(),
             cache_capacity: 100_000,
             require_payment_on_error: true,
         }
@@ -48,30 +70,25 @@ impl PaymentStatus {
     pub fn can_store(&self) -> bool {
         matches!(
             self,
-            PaymentStatus::AlreadyPaid
-                | PaymentStatus::CachedAsVerified
-                | PaymentStatus::PaymentVerified
+            Self::AlreadyPaid | Self::CachedAsVerified | Self::PaymentVerified
         )
     }
 
     /// Returns true if this status indicates the data was already paid for.
     #[must_use]
     pub fn is_free(&self) -> bool {
-        matches!(
-            self,
-            PaymentStatus::AlreadyPaid | PaymentStatus::CachedAsVerified
-        )
+        matches!(self, Self::AlreadyPaid | Self::CachedAsVerified)
     }
 }
 
 /// Main payment verifier for saorsa-node.
 ///
 /// Combines:
-/// 1. LRU cache for fast lookups of previously verified XorNames
+/// 1. LRU cache for fast lookups of previously verified `XorName` values
 /// 2. Autonomi network verification for checking if data already exists
 /// 3. EVM payment verification for new data (TODO)
 pub struct PaymentVerifier {
-    /// LRU cache of verified XorNames.
+    /// LRU cache of verified `XorName` values.
     cache: VerifiedCache,
     /// Autonomi network verifier.
     autonomi: AutonomVerifier,
@@ -102,7 +119,7 @@ impl PaymentVerifier {
         })
     }
 
-    /// Check if payment is required for the given XorName.
+    /// Check if payment is required for the given `XorName`.
     ///
     /// This is the main entry point for payment verification:
     /// 1. Check LRU cache (fast path)
@@ -202,23 +219,21 @@ impl PaymentVerifier {
                 // Payment is required - verify the proof
                 match payment_proof {
                     Some(proof) => {
-                        // TODO: Implement EVM payment verification
-                        // This will involve:
-                        // 1. Deserialize the ProofOfPayment
-                        // 2. Verify signatures
-                        // 3. Check EVM transaction on Arbitrum
-                        // 4. Verify payment amount and recipient
-
                         if proof.is_empty() {
                             return Err(Error::Payment("Empty payment proof".to_string()));
                         }
 
-                        // Placeholder: Accept any non-empty proof for now
-                        // TODO: Implement actual EVM verification
-                        warn!(
-                            "EVM verification not yet implemented - accepting payment for {}",
-                            hex::encode(xorname)
-                        );
+                        // Deserialize the ProofOfPayment
+                        let payment: ProofOfPayment = rmp_serde::from_slice(proof).map_err(|e| {
+                            Error::Payment(format!("Failed to deserialize payment proof: {e}"))
+                        })?;
+
+                        // Verify the payment using EVM
+                        self.verify_evm_payment(xorname, &payment).await?;
+
+                        // Cache the verified xorname
+                        self.cache.insert(*xorname);
+
                         Ok(PaymentStatus::PaymentVerified)
                     }
                     None => {
@@ -254,15 +269,95 @@ impl PaymentVerifier {
     pub fn autonomi_enabled(&self) -> bool {
         self.autonomi.is_enabled()
     }
+
+    /// Check if EVM verification is enabled.
+    #[must_use]
+    pub fn evm_enabled(&self) -> bool {
+        self.config.evm.enabled
+    }
+
+    /// Verify an EVM payment proof.
+    ///
+    /// This verifies that:
+    /// 1. All quote signatures are valid
+    /// 2. The payment was made on-chain
+    async fn verify_evm_payment(&self, xorname: &XorName, payment: &ProofOfPayment) -> Result<()> {
+        debug!(
+            "Verifying EVM payment for {} with {} quotes",
+            hex::encode(xorname),
+            payment.peer_quotes.len()
+        );
+
+        // Skip EVM verification if disabled
+        if !self.config.evm.enabled {
+            warn!("EVM verification disabled - accepting payment without on-chain check");
+            return Ok(());
+        }
+
+        // Verify quote signatures first (doesn't require network)
+        for (encoded_peer_id, quote) in &payment.peer_quotes {
+            let peer_id = encoded_peer_id.to_peer_id().map_err(|e| {
+                Error::Payment(format!("Invalid peer ID in payment proof: {e}"))
+            })?;
+
+            if !quote.check_is_signed_by_claimed_peer(peer_id) {
+                return Err(Error::Payment(format!(
+                    "Quote signature invalid for peer {peer_id}"
+                )));
+            }
+        }
+
+        // Get the payment digest for on-chain verification
+        let payment_digest = payment.digest();
+
+        if payment_digest.is_empty() {
+            return Err(Error::Payment("Payment has no quotes".to_string()));
+        }
+
+        // Verify on-chain payment
+        // Note: We pass empty owned_quote_hashes because we're not a node claiming payment,
+        // we just want to verify the payment is valid
+        let owned_quote_hashes = vec![];
+        match evmlib::contract::payment_vault::verify_data_payment(
+            &self.config.evm.network,
+            owned_quote_hashes,
+            payment_digest,
+        )
+        .await
+        {
+            Ok(_amount) => {
+                info!(
+                    "EVM payment verified for {}",
+                    hex::encode(xorname)
+                );
+                Ok(())
+            }
+            Err(evmlib::contract::payment_vault::error::Error::PaymentInvalid) => {
+                Err(Error::Payment(format!(
+                    "Payment verification failed on-chain for {}",
+                    hex::encode(xorname)
+                )))
+            }
+            Err(e) => Err(Error::Payment(format!(
+                "EVM verification error for {}: {e}",
+                hex::encode(xorname)
+            ))),
+        }
+    }
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used)]
 mod tests {
     use super::*;
 
     async fn create_test_verifier() -> PaymentVerifier {
         let config = PaymentVerifierConfig {
             autonomi: AutonomVerifierConfig {
+                enabled: false, // Disabled for tests
+                ..Default::default()
+            },
+            evm: EvmVerifierConfig {
                 enabled: false, // Disabled for tests
                 ..Default::default()
             },
@@ -310,10 +405,15 @@ mod tests {
         let verifier = create_test_verifier().await;
         let xorname = [1u8; 32];
 
-        // Should succeed with any non-empty proof (for now)
-        let proof = vec![1u8, 2, 3, 4];
-        let result = verifier.verify_payment(&xorname, Some(&proof)).await;
-        assert!(result.is_ok());
+        // Create a valid (but empty) ProofOfPayment
+        let proof = ProofOfPayment { peer_quotes: vec![] };
+        let proof_bytes =
+            rmp_serde::to_vec(&proof).expect("should serialize");
+
+        // Should succeed with a valid proof when EVM verification is disabled
+        // Note: With EVM verification disabled, even empty proofs pass
+        let result = verifier.verify_payment(&xorname, Some(&proof_bytes)).await;
+        assert!(result.is_ok(), "Expected Ok, got: {result:?}");
         assert_eq!(result.expect("verified"), PaymentStatus::PaymentVerified);
     }
 

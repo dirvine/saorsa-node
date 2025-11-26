@@ -68,11 +68,12 @@ hex = "0.4"
 # Utilities
 bytes = "1"
 chrono = { version = "0.4", features = ["serde"] }
+tempfile = "3"
 
 [dev-dependencies]
-tempfile = "3"
 tokio-test = "0.4"
 proptest = "1"
+serde_json = "1"
 
 [features]
 default = []
@@ -94,9 +95,15 @@ unsafe_code = "forbid"
 missing_docs = "warn"
 
 [lints.clippy]
-all = "warn"
-pedantic = "warn"
-nursery = "warn"
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
 unwrap_used = "deny"
 expect_used = "deny"
 panic = "deny"
+# Allow async functions that will have await statements added later
+unused_async = "allow"
+# Allow slightly complex functions during initial development
+cognitive_complexity = "allow"
+# Allow non-const functions during initial development (may need runtime features later)
+missing_const_for_fn = "allow"
