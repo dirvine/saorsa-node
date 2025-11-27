@@ -91,16 +91,12 @@ impl NodeBuilder {
     fn build_core_config(config: &NodeConfig) -> Result<CoreNodeConfig> {
         // Determine listen address based on port and IP version
         let listen_addr: SocketAddr = match config.ip_version {
-            IpVersion::Ipv4 | IpVersion::Dual => {
-                format!("0.0.0.0:{}", config.port)
-                    .parse()
-                    .map_err(|e| Error::Config(format!("Invalid listen address: {e}")))?
-            }
-            IpVersion::Ipv6 => {
-                format!("[::]:{}", config.port)
-                    .parse()
-                    .map_err(|e| Error::Config(format!("Invalid listen address: {e}")))?
-            }
+            IpVersion::Ipv4 | IpVersion::Dual => format!("0.0.0.0:{}", config.port)
+                .parse()
+                .map_err(|e| Error::Config(format!("Invalid listen address: {e}")))?,
+            IpVersion::Ipv6 => format!("[::]:{}", config.port)
+                .parse()
+                .map_err(|e| Error::Config(format!("Invalid listen address: {e}")))?,
         };
 
         let mut core_config = CoreNodeConfig::new()

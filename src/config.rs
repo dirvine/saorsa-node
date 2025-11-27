@@ -191,10 +191,11 @@ fn default_github_repo() -> String {
     "dirvine/saorsa-node".to_string()
 }
 
-
 fn default_root_dir() -> PathBuf {
-    directories::ProjectDirs::from("", "", "saorsa")
-        .map_or_else(|| PathBuf::from(".saorsa"), |dirs| dirs.data_dir().to_path_buf())
+    directories::ProjectDirs::from("", "", "saorsa").map_or_else(
+        || PathBuf::from(".saorsa"),
+        |dirs| dirs.data_dir().to_path_buf(),
+    )
 }
 
 fn default_log_level() -> String {
@@ -226,7 +227,8 @@ impl NodeConfig {
     ///
     /// Returns an error if the file cannot be written.
     pub fn to_file(&self, path: &std::path::Path) -> crate::Result<()> {
-        let content = toml::to_string_pretty(self).map_err(|e| crate::Error::Config(e.to_string()))?;
+        let content =
+            toml::to_string_pretty(self).map_err(|e| crate::Error::Config(e.to_string()))?;
         std::fs::write(path, content)?;
         Ok(())
     }

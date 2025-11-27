@@ -77,7 +77,7 @@ pub struct PointerRecord {
     pub owner: [u8; 32],
     /// The counter for updates.
     pub counter: u64,
-    /// The target XorName this pointer references.
+    /// The target `XorName` this pointer references.
     pub target: XorName,
     /// The signature over the record.
     pub signature: Vec<u8>,

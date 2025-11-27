@@ -7,6 +7,9 @@
 //! Usage:
 //!   cargo run --bin saorsa-keygen [output-dir]
 
+// This is a standalone CLI tool that exits on any error, so expect/unwrap is acceptable
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use saorsa_pqc::api::sig::ml_dsa_65;
 use std::env;
 use std::fs;
@@ -54,7 +57,11 @@ fn main() {
     let rust_code_path = output_dir.join("release_key_embed.rs");
     let mut rust_file = fs::File::create(&rust_code_path).expect("Failed to create Rust file");
 
-    writeln!(rust_file, "/// Embedded release signing public key (ML-DSA-65).").unwrap();
+    writeln!(
+        rust_file,
+        "/// Embedded release signing public key (ML-DSA-65)."
+    )
+    .unwrap();
     writeln!(rust_file, "///").unwrap();
     writeln!(
         rust_file,

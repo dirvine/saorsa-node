@@ -90,7 +90,11 @@ impl StagedRollout {
         #[allow(clippy::cast_precision_loss)]
         let delay_fraction = (hash_value as f64) / (u64::MAX as f64);
 
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_precision_loss
+        )]
         let delay_secs = (delay_fraction * max_delay_secs as f64) as u64;
 
         let delay = Duration::from_secs(delay_secs);
@@ -111,7 +115,7 @@ impl StagedRollout {
         self.max_delay_hours
     }
 
-    /// Check if staged rollout is enabled (max_delay_hours > 0).
+    /// Check if staged rollout is enabled (`max_delay_hours` > 0).
     #[must_use]
     pub fn is_enabled(&self) -> bool {
         self.max_delay_hours > 0
@@ -130,7 +134,7 @@ impl StagedRollout {
 
         // Include version in the hash for version-specific delays
         let mut hasher = Sha256::new();
-        hasher.update(&self.node_id_hash);
+        hasher.update(self.node_id_hash);
         hasher.update(version.to_string().as_bytes());
         let hash_result = hasher.finalize();
 
@@ -150,7 +154,11 @@ impl StagedRollout {
         #[allow(clippy::cast_precision_loss)]
         let delay_fraction = (hash_value as f64) / (u64::MAX as f64);
 
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_precision_loss
+        )]
         let delay_secs = (delay_fraction * max_delay_secs as f64) as u64;
 
         Duration::from_secs(delay_secs)
@@ -215,8 +223,12 @@ mod tests {
 
         // Check ratio is approximately 2:1 (with 10% tolerance)
         if delay_12h > 0 {
+            #[allow(clippy::cast_precision_loss)]
             let ratio = delay_24h as f64 / delay_12h as f64;
-            assert!((ratio - 2.0).abs() < 0.1, "Ratio should be ~2.0, got {ratio}");
+            assert!(
+                (ratio - 2.0).abs() < 0.1,
+                "Ratio should be ~2.0, got {ratio}"
+            );
         }
     }
 

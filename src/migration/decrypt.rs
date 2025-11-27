@@ -80,12 +80,12 @@ pub fn decrypt_record(encrypted: &[u8], key: &[u8], nonce: &[u8]) -> Result<Vec<
 /// * `master_key` - The master secret (input keying material)
 /// * `salt` - Optional salt value
 /// * `info` - Context and application-specific info
-/// * `output` - Buffer to write the derived key (must be KEY_SIZE bytes)
+/// * `output` - Buffer to write the derived key (must be `KEY_SIZE` bytes)
 ///
 /// # Errors
 ///
 /// Returns an error if:
-/// - The output buffer is not KEY_SIZE bytes
+/// - The output buffer is not `KEY_SIZE` bytes
 /// - HKDF expansion fails
 pub fn derive_key(
     master_key: &[u8],
@@ -108,14 +108,14 @@ pub fn derive_key(
     Ok(())
 }
 
-/// Derive a record-specific key from a master key and XorName.
+/// Derive a record-specific key from a master key and `XorName`.
 ///
 /// This matches ant-node's key derivation pattern for stored records.
 ///
 /// # Arguments
 ///
 /// * `master_key` - The node's master secret
-/// * `xorname` - The 32-byte XorName of the record
+/// * `xorname` - The 32-byte `XorName` of the record
 ///
 /// # Returns
 ///
@@ -126,7 +126,12 @@ pub fn derive_key(
 /// Returns an error if key derivation fails.
 pub fn derive_record_key(master_key: &[u8], xorname: &[u8; 32]) -> Result<[u8; KEY_SIZE]> {
     let mut key = [0u8; KEY_SIZE];
-    derive_key(master_key, Some(xorname), b"ant-node-record-encryption", &mut key)?;
+    derive_key(
+        master_key,
+        Some(xorname),
+        b"ant-node-record-encryption",
+        &mut key,
+    )?;
     Ok(key)
 }
 
@@ -176,7 +181,12 @@ pub fn decrypt_with_embedded_nonce(data: &[u8], key: &[u8]) -> Result<Vec<u8>> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
 mod tests {
     use super::*;
     use aes_gcm_siv::aead::OsRng;

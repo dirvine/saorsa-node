@@ -15,7 +15,6 @@ pub type XorName = [u8; 32];
 /// Default cache capacity (100,000 entries = 3.2MB memory).
 const DEFAULT_CACHE_CAPACITY: usize = 100_000;
 
-
 /// LRU cache for verified `XorName` values.
 ///
 /// This cache stores `XorName` values that have been verified to exist on the
@@ -201,7 +200,7 @@ mod tests {
         cache.insert(xorname3);
         assert_eq!(cache.len(), 2);
         assert!(!cache.contains(&xorname1)); // evicted
-        // Note: after contains call on evicted item, stats will show a miss
+                                             // Note: after contains call on evicted item, stats will show a miss
     }
 
     #[test]

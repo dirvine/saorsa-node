@@ -136,6 +136,7 @@ impl HybridClient {
     }
 
     /// Set the P2P node for saorsa network operations.
+    #[must_use]
     pub fn with_node(mut self, node: Arc<P2PNode>) -> Self {
         self.quantum = self.quantum.with_node(node);
         self
@@ -149,7 +150,7 @@ impl HybridClient {
     ///
     /// # Arguments
     ///
-    /// * `address` - The XorName address of the chunk
+    /// * `address` - The `XorName` address of the chunk
     ///
     /// # Returns
     ///
@@ -177,23 +178,20 @@ impl HybridClient {
         }
 
         // Fall back to autonomi
-        match self.legacy.get_chunk(address).await? {
-            Some(chunk) => {
-                debug!("Chunk found on autonomi network");
-                self.stats.write().autonomi_hits += 1;
+        if let Some(chunk) = self.legacy.get_chunk(address).await? {
+            debug!("Chunk found on autonomi network");
+            self.stats.write().autonomi_hits += 1;
 
-                // Auto-migrate to saorsa if enabled
-                if self.config.auto_migrate {
-                    self.migrate_chunk(&chunk).await?;
-                }
+            // Auto-migrate to saorsa if enabled
+            if self.config.auto_migrate {
+                self.migrate_chunk(&chunk).await?;
+            }
 
-                Ok(Some(chunk))
-            }
-            None => {
-                debug!("Chunk not found on any network");
-                self.stats.write().misses += 1;
-                Ok(None)
-            }
+            Ok(Some(chunk))
+        } else {
+            debug!("Chunk not found on any network");
+            self.stats.write().misses += 1;
+            Ok(None)
         }
     }
 
@@ -207,7 +205,7 @@ impl HybridClient {
     ///
     /// # Returns
     ///
-    /// The XorName address where the chunk was stored.
+    /// The `XorName` address where the chunk was stored.
     ///
     /// # Errors
     ///
@@ -245,21 +243,18 @@ impl HybridClient {
         }
 
         // Fall back to autonomi
-        match self.legacy.get_scratchpad(owner).await? {
-            Some(entry) => {
-                self.stats.write().autonomi_hits += 1;
+        if let Some(entry) = self.legacy.get_scratchpad(owner).await? {
+            self.stats.write().autonomi_hits += 1;
 
-                // Auto-migrate
-                if self.config.auto_migrate {
-                    self.migrate_scratchpad(&entry).await?;
-                }
+            // Auto-migrate
+            if self.config.auto_migrate {
+                self.migrate_scratchpad(&entry).await?;
+            }
 
-                Ok(Some(entry))
-            }
-            None => {
-                self.stats.write().misses += 1;
-                Ok(None)
-            }
+            Ok(Some(entry))
+        } else {
+            self.stats.write().misses += 1;
+            Ok(None)
         }
     }
 
@@ -317,20 +312,17 @@ impl HybridClient {
         }
 
         // Fall back to autonomi
-        match self.legacy.get_pointer(owner).await? {
-            Some(record) => {
-                self.stats.write().autonomi_hits += 1;
+        if let Some(record) = self.legacy.get_pointer(owner).await? {
+            self.stats.write().autonomi_hits += 1;
 
-                if self.config.auto_migrate {
-                    self.migrate_pointer(&record).await?;
-                }
+            if self.config.auto_migrate {
+                self.migrate_pointer(&record).await?;
+            }
 
-                Ok(Some(record))
-            }
-            None => {
-                self.stats.write().misses += 1;
-                Ok(None)
-            }
+            Ok(Some(record))
+        } else {
+            self.stats.write().misses += 1;
+            Ok(None)
         }
     }
 
@@ -339,7 +331,7 @@ impl HybridClient {
     /// # Arguments
     ///
     /// * `owner` - The owner's public key
-    /// * `target` - The target XorName
+    /// * `target` - The target `XorName`
     /// * `counter` - Update counter
     ///
     /// # Returns
@@ -364,7 +356,7 @@ impl HybridClient {
     ///
     /// # Arguments
     ///
-    /// * `address` - The XorName address
+    /// * `address` - The `XorName` address
     ///
     /// # Returns
     ///
@@ -383,20 +375,17 @@ impl HybridClient {
         }
 
         // Fall back to autonomi
-        match self.legacy.get_graph_entry(address).await? {
-            Some(entry) => {
-                self.stats.write().autonomi_hits += 1;
+        if let Some(entry) = self.legacy.get_graph_entry(address).await? {
+            self.stats.write().autonomi_hits += 1;
 
-                if self.config.auto_migrate {
-                    self.migrate_graph_entry(&entry).await?;
-                }
+            if self.config.auto_migrate {
+                self.migrate_graph_entry(&entry).await?;
+            }
 
-                Ok(Some(entry))
-            }
-            None => {
-                self.stats.write().misses += 1;
-                Ok(None)
-            }
+            Ok(Some(entry))
+        } else {
+            self.stats.write().misses += 1;
+            Ok(None)
         }
     }
 
@@ -421,7 +410,10 @@ impl HybridClient {
         parents: Vec<XorName>,
         content: Vec<u8>,
     ) -> Result<GraphEntry> {
-        let entry = self.quantum.put_graph_entry(owner, parents, content).await?;
+        let entry = self
+            .quantum
+            .put_graph_entry(owner, parents, content)
+            .await?;
         self.stats.write().saorsa_writes += 1;
         Ok(entry)
     }
@@ -430,7 +422,7 @@ impl HybridClient {
     ///
     /// # Arguments
     ///
-    /// * `address` - The XorName to look up
+    /// * `address` - The `XorName` to look up
     ///
     /// # Returns
     ///
@@ -468,7 +460,7 @@ impl HybridClient {
     ///
     /// # Arguments
     ///
-    /// * `address` - The XorName to check
+    /// * `address` - The `XorName` to check
     ///
     /// # Returns
     ///
@@ -479,7 +471,7 @@ impl HybridClient {
     /// Returns an error if network operations fail.
     pub async fn exists(&self, address: &XorName) -> Result<Option<DataSource>> {
         // Check saorsa first
-        if let Ok(true) = self.quantum.exists(address).await {
+        if matches!(self.quantum.exists(address).await, Ok(true)) {
             return Ok(Some(DataSource::Saorsa));
         }
 

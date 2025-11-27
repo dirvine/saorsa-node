@@ -21,7 +21,7 @@
 //! - **Chunk**: Immutable content-addressed data
 //! - **Scratchpad**: Mutable single-owner data with counter
 //! - **Pointer**: References to other data addresses
-//! - **GraphEntry**: Linked data structures with parents/descendants
+//! - **`GraphEntry`**: Linked data structures with parents/descendants
 //!
 //! # Example
 //!

@@ -70,8 +70,8 @@ impl UpgradeMonitor {
     /// * `check_interval_hours` - How often to check for updates
     #[must_use]
     pub fn new(repo: String, channel: UpgradeChannel, check_interval_hours: u64) -> Self {
-        let current_version = Version::parse(env!("CARGO_PKG_VERSION"))
-            .unwrap_or_else(|_| Version::new(0, 0, 0));
+        let current_version =
+            Version::parse(env!("CARGO_PKG_VERSION")).unwrap_or_else(|_| Version::new(0, 0, 0));
 
         let client = reqwest::Client::builder()
             .user_agent(concat!("saorsa-node/", env!("CARGO_PKG_VERSION")))
@@ -97,13 +97,11 @@ impl UpgradeMonitor {
     ///
     /// * `node_id` - The node's unique identifier for deterministic delay calculation
     /// * `max_delay_hours` - Maximum rollout window (0 to disable)
+    #[must_use]
     pub fn with_staged_rollout(mut self, node_id: &[u8], max_delay_hours: u64) -> Self {
         if max_delay_hours > 0 {
             self.staged_rollout = Some(StagedRollout::new(node_id, max_delay_hours));
-            info!(
-                "Staged rollout enabled: {} hour window",
-                max_delay_hours
-            );
+            info!("Staged rollout enabled: {} hour window", max_delay_hours);
         }
         self
     }
@@ -175,10 +173,7 @@ impl UpgradeMonitor {
     ///
     /// Returns an error if the GitHub API request fails.
     pub async fn check_for_updates(&self) -> Result<Option<UpgradeInfo>> {
-        let api_url = format!(
-            "https://api.github.com/repos/{}/releases/latest",
-            self.repo
-        );
+        let api_url = format!("https://api.github.com/repos/{}/releases/latest", self.repo);
 
         debug!("Checking for updates from: {}", api_url);
 
@@ -385,10 +380,11 @@ pub fn find_platform_asset(assets: &[Asset]) -> Option<&Asset> {
 }
 
 /// Check if an asset name represents a binary (not a signature or other artifact).
+#[allow(clippy::case_sensitive_file_extension_comparisons)]
 fn is_binary_asset(name: &str) -> bool {
     let lower = name.to_lowercase();
 
-    // Exclude signatures and other non-binary files
+    // Exclude signatures and other non-binary files (already lowercased above)
     if lower.ends_with(".sig")
         || lower.ends_with(".sha256")
         || lower.ends_with(".md5")
@@ -501,11 +497,8 @@ mod tests {
     /// Test 6: Channel filtering - beta includes beta
     #[test]
     fn test_beta_channel_accepts_beta() {
-        let monitor = UpgradeMonitor::new(
-            "dirvine/saorsa-node".to_string(),
-            UpgradeChannel::Beta,
-            24,
-        );
+        let monitor =
+            UpgradeMonitor::new("dirvine/saorsa-node".to_string(), UpgradeChannel::Beta, 24);
 
         let beta_version = Version::parse("1.0.0-beta.1").unwrap();
         assert!(monitor.version_matches_channel(&beta_version));
@@ -581,7 +574,7 @@ mod tests {
         assert!(!asset.name.to_lowercase().ends_with(".sig"));
     }
 
-    /// Test: is_binary_asset correctly identifies binaries
+    /// Test: `is_binary_asset` correctly identifies binaries
     #[test]
     fn test_is_binary_asset() {
         // Binary files should be identified
@@ -599,12 +592,10 @@ mod tests {
     /// Test 10: Monitor check interval
     #[test]
     fn test_check_interval() {
-        let monitor =
-            UpgradeMonitor::new("test/repo".to_string(), UpgradeChannel::Stable, 24);
+        let monitor = UpgradeMonitor::new("test/repo".to_string(), UpgradeChannel::Stable, 24);
         assert_eq!(monitor.check_interval(), Duration::from_secs(24 * 3600));
 
-        let monitor2 =
-            UpgradeMonitor::new("test/repo".to_string(), UpgradeChannel::Stable, 6);
+        let monitor2 = UpgradeMonitor::new("test/repo".to_string(), UpgradeChannel::Stable, 6);
         assert_eq!(monitor2.check_interval(), Duration::from_secs(6 * 3600));
     }
 
@@ -625,11 +616,19 @@ mod tests {
             prerelease: false,
             assets: vec![
                 Asset {
-                    name: format!("saorsa-node-{}-{}", std::env::consts::ARCH, std::env::consts::OS),
+                    name: format!(
+                        "saorsa-node-{}-{}",
+                        std::env::consts::ARCH,
+                        std::env::consts::OS
+                    ),
                     browser_download_url: "https://example.com/binary".to_string(),
                 },
                 Asset {
-                    name: format!("saorsa-node-{}-{}.sig", std::env::consts::ARCH, std::env::consts::OS),
+                    name: format!(
+                        "saorsa-node-{}-{}.sig",
+                        std::env::consts::ARCH,
+                        std::env::consts::OS
+                    ),
                     browser_download_url: "https://example.com/binary.sig".to_string(),
                 },
             ],
@@ -683,7 +682,10 @@ mod tests {
         };
 
         let result = monitor.process_release(&release);
-        assert!(result.is_none(), "Should not find upgrade for older version");
+        assert!(
+            result.is_none(),
+            "Should not find upgrade for older version"
+        );
     }
 
     /// Test 14: Process release - beta filtered by stable channel
@@ -705,14 +707,20 @@ mod tests {
         };
 
         let result = monitor.process_release(&release);
-        assert!(result.is_none(), "Stable channel should filter beta releases");
+        assert!(
+            result.is_none(),
+            "Stable channel should filter beta releases"
+        );
     }
 
     /// Test 15: Monitor repo getter
     #[test]
     fn test_monitor_repo() {
-        let monitor =
-            UpgradeMonitor::new("dirvine/saorsa-node".to_string(), UpgradeChannel::Stable, 24);
+        let monitor = UpgradeMonitor::new(
+            "dirvine/saorsa-node".to_string(),
+            UpgradeChannel::Stable,
+            24,
+        );
         assert_eq!(monitor.repo(), "dirvine/saorsa-node");
     }
 
@@ -736,8 +744,12 @@ mod tests {
         assert!(patterns.iter().any(|p| p.contains("linux")));
 
         let patterns_arm = build_platform_patterns("aarch64", "macos");
-        assert!(patterns_arm.iter().any(|p| p.contains("aarch64") || p.contains("arm64")));
-        assert!(patterns_arm.iter().any(|p| p.contains("darwin") || p.contains("macos")));
+        assert!(patterns_arm
+            .iter()
+            .any(|p| p.contains("aarch64") || p.contains("arm64")));
+        assert!(patterns_arm
+            .iter()
+            .any(|p| p.contains("darwin") || p.contains("macos")));
     }
 
     /// Test 18: Invalid tag handling

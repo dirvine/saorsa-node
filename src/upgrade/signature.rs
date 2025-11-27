@@ -382,7 +382,10 @@ mod tests {
         let result = verify_binary_signature_with_key(file.path(), &short_sig, &public_key);
         assert!(result.is_err(), "Malformed signature should be rejected");
         assert!(
-            result.unwrap_err().to_string().contains("Invalid signature size"),
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid signature size"),
             "Error should mention invalid size"
         );
     }
@@ -459,8 +462,7 @@ mod tests {
         let mut sig_file = NamedTempFile::new().unwrap();
         sig_file.write_all(&signature.to_bytes()).unwrap();
 
-        let result =
-            verify_from_file_with_key(binary_file.path(), sig_file.path(), &public_key);
+        let result = verify_from_file_with_key(binary_file.path(), sig_file.path(), &public_key);
         assert!(
             result.is_ok(),
             "Detached sig file verification should succeed: {result:?}"
@@ -485,10 +487,7 @@ mod tests {
 
         let result =
             verify_binary_signature_with_key(file.path(), &signature.to_bytes(), &public_key);
-        assert!(
-            result.is_ok(),
-            "Large binary should verify: {result:?}"
-        );
+        assert!(result.is_ok(), "Large binary should verify: {result:?}");
     }
 
     /// Test: Embedded release key is properly configured

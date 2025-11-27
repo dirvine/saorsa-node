@@ -10,7 +10,9 @@
 //! - **ChaCha20-Poly1305**: Symmetric encryption for data at rest
 //! - **HKDF-SHA256**: Key derivation for record-specific keys
 
-use super::data_types::{DataChunk, DataSource, GraphEntry, PointerRecord, ScratchpadEntry, XorName};
+use super::data_types::{
+    DataChunk, DataSource, GraphEntry, PointerRecord, ScratchpadEntry, XorName,
+};
 use crate::error::{Error, Result};
 use bytes::Bytes;
 use saorsa_core::P2PNode;
@@ -49,6 +51,8 @@ pub struct QuantumClient {
     p2p_node: Option<Arc<P2PNode>>,
 }
 
+// TODO: Remove this allow once the async methods are fully implemented
+#[allow(clippy::unused_async)]
 impl QuantumClient {
     /// Create a new quantum client with the given configuration.
     #[must_use]
@@ -67,6 +71,7 @@ impl QuantumClient {
     }
 
     /// Set the P2P node for network operations.
+    #[must_use]
     pub fn with_node(mut self, node: Arc<P2PNode>) -> Self {
         self.p2p_node = Some(node);
         self
@@ -76,7 +81,7 @@ impl QuantumClient {
     ///
     /// # Arguments
     ///
-    /// * `address` - The XorName address of the chunk
+    /// * `address` - The `XorName` address of the chunk
     ///
     /// # Returns
     ///
@@ -86,7 +91,10 @@ impl QuantumClient {
     ///
     /// Returns an error if the network operation fails.
     pub async fn get_chunk(&self, address: &XorName) -> Result<Option<DataChunk>> {
-        debug!("Querying saorsa network for chunk: {}", hex::encode(address));
+        debug!(
+            "Querying saorsa network for chunk: {}",
+            hex::encode(address)
+        );
 
         let Some(ref _node) = self.p2p_node else {
             return Err(Error::Network("P2P node not configured".into()));
@@ -115,12 +123,14 @@ impl QuantumClient {
     ///
     /// # Returns
     ///
-    /// The XorName address where the chunk was stored.
+    /// The `XorName` address where the chunk was stored.
     ///
     /// # Errors
     ///
     /// Returns an error if the store operation fails.
     pub async fn put_chunk(&self, content: Bytes) -> Result<XorName> {
+        use sha2::{Digest, Sha256};
+
         debug!("Storing chunk on saorsa network ({} bytes)", content.len());
 
         let Some(ref _node) = self.p2p_node else {
@@ -135,7 +145,6 @@ impl QuantumClient {
         // 5. Verify storage on replica_count nodes
 
         // Compute content address (placeholder using SHA256)
-        use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
         hasher.update(&content);
         let hash = hasher.finalize();
@@ -238,7 +247,7 @@ impl QuantumClient {
     /// # Arguments
     ///
     /// * `owner` - The owner's public key
-    /// * `target` - The target XorName this pointer references
+    /// * `target` - The target `XorName` this pointer references
     /// * `counter` - Update counter
     ///
     /// # Returns
@@ -352,7 +361,7 @@ impl QuantumClient {
     ///
     /// # Arguments
     ///
-    /// * `address` - The XorName address of the graph entry
+    /// * `address` - The `XorName` address of the graph entry
     ///
     /// # Returns
     ///
@@ -379,7 +388,7 @@ impl QuantumClient {
     ///
     /// # Arguments
     ///
-    /// * `address` - The XorName to check
+    /// * `address` - The `XorName` to check
     ///
     /// # Returns
     ///

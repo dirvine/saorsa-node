@@ -1,0 +1,1038 @@
+//! Test network infrastructure for spawning and managing multiple nodes.
+//!
+//! This module provides the core infrastructure for creating a local testnet
+//! of 25 saorsa nodes for E2E testing.
+
+use bytes::Bytes;
+use saorsa_core::{NodeConfig as CoreNodeConfig, P2PNode};
+use saorsa_node::client::{
+    DataChunk, DataSource, GraphEntry, PointerRecord, ScratchpadEntry, XorName,
+};
+use sha2::{Digest, Sha256};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::{broadcast, RwLock};
+use tokio::task::JoinHandle;
+use tokio::time::Instant;
+use tracing::{debug, error, info, warn};
+
+/// Error type for testnet operations.
+#[derive(Debug, thiserror::Error)]
+pub enum TestnetError {
+    /// Configuration error
+    #[error("Configuration error: {0}")]
+    Config(String),
+
+    /// Node startup error
+    #[error("Node startup error: {0}")]
+    Startup(String),
+
+    /// Network stabilization error
+    #[error("Network stabilization error: {0}")]
+    Stabilization(String),
+
+    /// IO error
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+
+    /// Core error
+    #[error("Core error: {0}")]
+    Core(String),
+
+    /// Data storage error
+    #[error("Storage error: {0}")]
+    Storage(String),
+
+    /// Data retrieval error
+    #[error("Retrieval error: {0}")]
+    Retrieval(String),
+
+    /// Serialization error
+    #[error("Serialization error: {0}")]
+    Serialization(String),
+
+    /// Node not running error
+    #[error("Node not running")]
+    NodeNotRunning,
+}
+
+/// Result type for testnet operations.
+pub type Result<T> = std::result::Result<T, TestnetError>;
+
+/// Configuration for the test network.
+#[derive(Debug, Clone)]
+pub struct TestNetworkConfig {
+    /// Number of nodes to spawn (default: 25).
+    pub node_count: usize,
+
+    /// Base port for node allocation (default: 19000).
+    pub base_port: u16,
+
+    /// Number of bootstrap nodes (first N nodes, default: 3).
+    pub bootstrap_count: usize,
+
+    /// Root directory for test data.
+    pub test_data_dir: PathBuf,
+
+    /// Delay between node spawns (default: 200ms).
+    pub spawn_delay: Duration,
+
+    /// Timeout for network stabilization (default: 120s).
+    pub stabilization_timeout: Duration,
+
+    /// Timeout for single node startup (default: 30s).
+    pub node_startup_timeout: Duration,
+
+    /// Enable verbose logging for test nodes.
+    pub enable_node_logging: bool,
+}
+
+impl Default for TestNetworkConfig {
+    fn default() -> Self {
+        Self {
+            node_count: 25,
+            base_port: 19000,
+            bootstrap_count: 3,
+            test_data_dir: std::env::temp_dir().join("saorsa_testnet"),
+            spawn_delay: Duration::from_millis(200),
+            stabilization_timeout: Duration::from_secs(120),
+            node_startup_timeout: Duration::from_secs(30),
+            enable_node_logging: false,
+        }
+    }
+}
+
+impl TestNetworkConfig {
+    /// Create a minimal configuration for quick tests (5 nodes).
+    #[must_use]
+    pub fn minimal() -> Self {
+        Self {
+            node_count: 5,
+            bootstrap_count: 2,
+            stabilization_timeout: Duration::from_secs(30),
+            ..Default::default()
+        }
+    }
+
+    /// Create a small configuration for faster tests (10 nodes).
+    #[must_use]
+    pub fn small() -> Self {
+        Self {
+            node_count: 10,
+            bootstrap_count: 3,
+            stabilization_timeout: Duration::from_secs(60),
+            ..Default::default()
+        }
+    }
+}
+
+/// State of the test network.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NetworkState {
+    /// Network has not been started.
+    Uninitialized,
+    /// Bootstrap nodes are starting.
+    BootstrappingPhase,
+    /// Regular nodes are starting.
+    NodeSpawningPhase,
+    /// Waiting for network stabilization.
+    Stabilizing,
+    /// Network is fully operational.
+    Ready,
+    /// Network is shutting down.
+    ShuttingDown,
+    /// Network has been shut down.
+    Stopped,
+    /// Network failed to start.
+    Failed(String),
+}
+
+impl NetworkState {
+    /// Check if the network is in a running state.
+    #[must_use]
+    pub fn is_running(&self) -> bool {
+        matches!(self, Self::Ready | Self::Stabilizing)
+    }
+}
+
+/// State of an individual test node.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NodeState {
+    /// Node has not been started.
+    Pending,
+    /// Node is starting up.
+    Starting,
+    /// Node is running and healthy.
+    Running,
+    /// Node is connecting to peers.
+    Connecting,
+    /// Node is fully connected to the network.
+    Connected,
+    /// Node is stopping.
+    Stopping,
+    /// Node has stopped.
+    Stopped,
+    /// Node encountered an error.
+    Failed(String),
+}
+
+/// Represents a single test node in the network.
+pub struct TestNode {
+    /// Node index (0-based).
+    pub index: usize,
+
+    /// Unique node ID.
+    pub node_id: String,
+
+    /// Port this node listens on.
+    pub port: u16,
+
+    /// Socket address for this node.
+    pub address: SocketAddr,
+
+    /// Root directory for this node's data.
+    pub data_dir: PathBuf,
+
+    /// Reference to the running P2P node.
+    pub p2p_node: Option<Arc<P2PNode>>,
+
+    /// Is this a bootstrap node?
+    pub is_bootstrap: bool,
+
+    /// Node state.
+    pub state: Arc<RwLock<NodeState>>,
+
+    /// Bootstrap addresses this node connects to.
+    pub bootstrap_addrs: Vec<SocketAddr>,
+}
+
+impl TestNode {
+    /// Check if this node is running.
+    pub async fn is_running(&self) -> bool {
+        matches!(
+            &*self.state.read().await,
+            NodeState::Running | NodeState::Connected
+        )
+    }
+
+    /// Get the number of connected peers.
+    pub async fn peer_count(&self) -> usize {
+        if let Some(ref node) = self.p2p_node {
+            node.peer_count().await
+        } else {
+            0
+        }
+    }
+
+    // =========================================================================
+    // Chunk Operations (immutable, content-addressed)
+    // =========================================================================
+
+    /// Store a chunk on the network.
+    ///
+    /// Returns the content-addressed `XorName` where the chunk is stored.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the node is not running or storage fails.
+    pub async fn store_chunk(&self, data: &[u8]) -> Result<XorName> {
+        let node = self.p2p_node.as_ref().ok_or(TestnetError::NodeNotRunning)?;
+
+        // Compute content address (SHA256 hash)
+        let address = Self::compute_chunk_address(data);
+
+        // Store in DHT
+        node.dht_put(address, data.to_vec())
+            .await
+            .map_err(|e| TestnetError::Storage(format!("Failed to store chunk: {e}")))?;
+
+        debug!(
+            "Node {} stored chunk at {}",
+            self.index,
+            hex::encode(address)
+        );
+        Ok(address)
+    }
+
+    /// Retrieve a chunk from the network.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the node is not running or retrieval fails.
+    pub async fn get_chunk(&self, address: &XorName) -> Result<Option<DataChunk>> {
+        let node = self.p2p_node.as_ref().ok_or(TestnetError::NodeNotRunning)?;
+
+        match node.dht_get(*address).await {
+            Ok(Some(data)) => {
+                let chunk = DataChunk::new(*address, Bytes::from(data), DataSource::Saorsa);
+                Ok(Some(chunk))
+            }
+            Ok(None) => Ok(None),
+            Err(e) => Err(TestnetError::Retrieval(format!(
+                "Failed to retrieve chunk: {e}"
+            ))),
+        }
+    }
+
+    /// Compute content address for chunk data.
+    #[must_use]
+    pub fn compute_chunk_address(data: &[u8]) -> XorName {
+        let mut hasher = Sha256::new();
+        hasher.update(data);
+        let hash = hasher.finalize();
+        let mut address = [0u8; 32];
+        address.copy_from_slice(&hash);
+        address
+    }
+
+    // =========================================================================
+    // Scratchpad Operations (mutable, owner-indexed, counter versioning)
+    // =========================================================================
+
+    /// Store a scratchpad entry on the network.
+    ///
+    /// # Arguments
+    ///
+    /// * `owner` - The owner's public key (32 bytes)
+    /// * `content_type` - Application-defined content type
+    /// * `payload` - The data to store
+    /// * `counter` - Version counter (must be strictly increasing)
+    /// * `signature` - ML-DSA-65 signature over the entry
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the node is not running or storage fails.
+    pub async fn put_scratchpad(
+        &self,
+        owner: [u8; 32],
+        content_type: u64,
+        payload: Vec<u8>,
+        counter: u64,
+        signature: Vec<u8>,
+    ) -> Result<ScratchpadEntry> {
+        let node = self.p2p_node.as_ref().ok_or(TestnetError::NodeNotRunning)?;
+
+        let entry = ScratchpadEntry {
+            owner,
+            content_type,
+            payload,
+            counter,
+            signature,
+            source: DataSource::Saorsa,
+        };
+
+        // Compute address from owner
+        let address = Self::compute_scratchpad_address(&owner);
+
+        // Serialize the entry
+        let data = bincode::serialize(&entry)
+            .map_err(|e| TestnetError::Serialization(format!("Failed to serialize: {e}")))?;
+
+        // Store in DHT
+        node.dht_put(address, data)
+            .await
+            .map_err(|e| TestnetError::Storage(format!("Failed to store scratchpad: {e}")))?;
+
+        debug!(
+            "Node {} stored scratchpad for owner {}",
+            self.index,
+            hex::encode(owner)
+        );
+        Ok(entry)
+    }
+
+    /// Retrieve a scratchpad entry from the network.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the node is not running or retrieval fails.
+    pub async fn get_scratchpad(&self, owner: &[u8; 32]) -> Result<Option<ScratchpadEntry>> {
+        let node = self.p2p_node.as_ref().ok_or(TestnetError::NodeNotRunning)?;
+
+        let address = Self::compute_scratchpad_address(owner);
+
+        match node.dht_get(address).await {
+            Ok(Some(data)) => {
+                let mut entry: ScratchpadEntry = bincode::deserialize(&data).map_err(|e| {
+                    TestnetError::Serialization(format!("Failed to deserialize: {e}"))
+                })?;
+                entry.source = DataSource::Saorsa;
+                Ok(Some(entry))
+            }
+            Ok(None) => Ok(None),
+            Err(e) => Err(TestnetError::Retrieval(format!(
+                "Failed to retrieve scratchpad: {e}"
+            ))),
+        }
+    }
+
+    /// Compute scratchpad address from owner public key.
+    #[must_use]
+    pub fn compute_scratchpad_address(owner: &[u8; 32]) -> XorName {
+        let mut hasher = Sha256::new();
+        hasher.update(b"scratchpad:");
+        hasher.update(owner);
+        let hash = hasher.finalize();
+        let mut address = [0u8; 32];
+        address.copy_from_slice(&hash);
+        address
+    }
+
+    // =========================================================================
+    // Pointer Operations (mutable, owner-indexed)
+    // =========================================================================
+
+    /// Store a pointer record on the network.
+    ///
+    /// # Arguments
+    ///
+    /// * `owner` - The owner's public key (32 bytes)
+    /// * `target` - The `XorName` this pointer references
+    /// * `counter` - Version counter (must be strictly increasing)
+    /// * `signature` - ML-DSA-65 signature over the record
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the node is not running or storage fails.
+    pub async fn put_pointer(
+        &self,
+        owner: [u8; 32],
+        target: XorName,
+        counter: u64,
+        signature: Vec<u8>,
+    ) -> Result<PointerRecord> {
+        let node = self.p2p_node.as_ref().ok_or(TestnetError::NodeNotRunning)?;
+
+        let record = PointerRecord {
+            owner,
+            counter,
+            target,
+            signature,
+            source: DataSource::Saorsa,
+        };
+
+        // Compute address from owner
+        let address = Self::compute_pointer_address(&owner);
+
+        // Serialize the record
+        let data = bincode::serialize(&record)
+            .map_err(|e| TestnetError::Serialization(format!("Failed to serialize: {e}")))?;
+
+        // Store in DHT
+        node.dht_put(address, data)
+            .await
+            .map_err(|e| TestnetError::Storage(format!("Failed to store pointer: {e}")))?;
+
+        debug!(
+            "Node {} stored pointer for owner {}",
+            self.index,
+            hex::encode(owner)
+        );
+        Ok(record)
+    }
+
+    /// Retrieve a pointer record from the network.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the node is not running or retrieval fails.
+    pub async fn get_pointer(&self, owner: &[u8; 32]) -> Result<Option<PointerRecord>> {
+        let node = self.p2p_node.as_ref().ok_or(TestnetError::NodeNotRunning)?;
+
+        let address = Self::compute_pointer_address(owner);
+
+        match node.dht_get(address).await {
+            Ok(Some(data)) => {
+                let mut record: PointerRecord = bincode::deserialize(&data).map_err(|e| {
+                    TestnetError::Serialization(format!("Failed to deserialize: {e}"))
+                })?;
+                record.source = DataSource::Saorsa;
+                Ok(Some(record))
+            }
+            Ok(None) => Ok(None),
+            Err(e) => Err(TestnetError::Retrieval(format!(
+                "Failed to retrieve pointer: {e}"
+            ))),
+        }
+    }
+
+    /// Compute pointer address from owner public key.
+    #[must_use]
+    pub fn compute_pointer_address(owner: &[u8; 32]) -> XorName {
+        let mut hasher = Sha256::new();
+        hasher.update(b"pointer:");
+        hasher.update(owner);
+        let hash = hasher.finalize();
+        let mut address = [0u8; 32];
+        address.copy_from_slice(&hash);
+        address
+    }
+
+    // =========================================================================
+    // GraphEntry Operations (DAG with parent links)
+    // =========================================================================
+
+    /// Store a graph entry on the network.
+    ///
+    /// # Arguments
+    ///
+    /// * `owner` - The owner's public key (32 bytes)
+    /// * `parents` - Parent entry addresses (empty for root nodes)
+    /// * `content` - The content payload
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the node is not running or storage fails.
+    pub async fn put_graph_entry(
+        &self,
+        owner: [u8; 32],
+        parents: Vec<XorName>,
+        content: Vec<u8>,
+    ) -> Result<(XorName, GraphEntry)> {
+        let node = self.p2p_node.as_ref().ok_or(TestnetError::NodeNotRunning)?;
+
+        let entry = GraphEntry {
+            owner,
+            parents: parents.clone(),
+            content: content.clone(),
+            descendants: Vec::new(),
+            source: DataSource::Saorsa,
+        };
+
+        // Compute address from owner, content, and parents
+        let address = Self::compute_graph_entry_address(&owner, &content, &parents);
+
+        // Serialize the entry
+        let data = bincode::serialize(&entry)
+            .map_err(|e| TestnetError::Serialization(format!("Failed to serialize: {e}")))?;
+
+        // Store in DHT
+        node.dht_put(address, data)
+            .await
+            .map_err(|e| TestnetError::Storage(format!("Failed to store graph entry: {e}")))?;
+
+        debug!(
+            "Node {} stored graph entry at {}",
+            self.index,
+            hex::encode(address)
+        );
+        Ok((address, entry))
+    }
+
+    /// Retrieve a graph entry from the network.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the node is not running or retrieval fails.
+    pub async fn get_graph_entry(&self, address: &XorName) -> Result<Option<GraphEntry>> {
+        let node = self.p2p_node.as_ref().ok_or(TestnetError::NodeNotRunning)?;
+
+        match node.dht_get(*address).await {
+            Ok(Some(data)) => {
+                let mut entry: GraphEntry = bincode::deserialize(&data).map_err(|e| {
+                    TestnetError::Serialization(format!("Failed to deserialize: {e}"))
+                })?;
+                entry.source = DataSource::Saorsa;
+                Ok(Some(entry))
+            }
+            Ok(None) => Ok(None),
+            Err(e) => Err(TestnetError::Retrieval(format!(
+                "Failed to retrieve graph entry: {e}"
+            ))),
+        }
+    }
+
+    /// Compute graph entry address from owner, content, and parents.
+    #[must_use]
+    pub fn compute_graph_entry_address(
+        owner: &[u8; 32],
+        content: &[u8],
+        parents: &[XorName],
+    ) -> XorName {
+        let mut hasher = Sha256::new();
+        hasher.update(b"graph_entry:");
+        hasher.update(owner);
+        hasher.update(content);
+        for parent in parents {
+            hasher.update(parent);
+        }
+        let hash = hasher.finalize();
+        let mut address = [0u8; 32];
+        address.copy_from_slice(&hash);
+        address
+    }
+}
+
+/// Manages a network of test nodes.
+pub struct TestNetwork {
+    /// Network configuration.
+    config: TestNetworkConfig,
+
+    /// All test nodes (index `0..bootstrap_count` are bootstrap nodes).
+    nodes: Vec<TestNode>,
+
+    /// Shared shutdown signal.
+    shutdown_tx: broadcast::Sender<()>,
+
+    /// Network state.
+    state: Arc<RwLock<NetworkState>>,
+
+    /// Health monitor handle.
+    health_monitor: Option<JoinHandle<()>>,
+}
+
+impl TestNetwork {
+    /// Create a new test network with the given configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the configuration is invalid or the test
+    /// data directory cannot be created.
+    pub async fn new(config: TestNetworkConfig) -> Result<Self> {
+        // Validate configuration
+        if config.bootstrap_count >= config.node_count {
+            return Err(TestnetError::Config(
+                "Bootstrap count must be less than node count".to_string(),
+            ));
+        }
+
+        if config.bootstrap_count == 0 {
+            return Err(TestnetError::Config(
+                "At least one bootstrap node is required".to_string(),
+            ));
+        }
+
+        // Ensure test data directory exists
+        tokio::fs::create_dir_all(&config.test_data_dir).await?;
+
+        let (shutdown_tx, _) = broadcast::channel(1);
+
+        Ok(Self {
+            config,
+            nodes: Vec::new(),
+            shutdown_tx,
+            state: Arc::new(RwLock::new(NetworkState::Uninitialized)),
+            health_monitor: None,
+        })
+    }
+
+    /// Create a test network with default configuration (25 nodes).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if initialization fails.
+    pub async fn with_defaults() -> Result<Self> {
+        Self::new(TestNetworkConfig::default()).await
+    }
+
+    /// Create a test network with minimal configuration (5 nodes).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if initialization fails.
+    pub async fn minimal() -> Result<Self> {
+        Self::new(TestNetworkConfig::minimal()).await
+    }
+
+    /// Start the entire test network.
+    ///
+    /// This method:
+    /// 1. Starts bootstrap nodes first
+    /// 2. Waits for bootstrap nodes to be ready
+    /// 3. Starts regular nodes with bootstrap addresses
+    /// 4. Waits for network stabilization
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any node fails to start or the network
+    /// fails to stabilize within the timeout.
+    pub async fn start(&mut self) -> Result<()> {
+        info!(
+            "Starting test network with {} nodes ({} bootstrap)",
+            self.config.node_count, self.config.bootstrap_count
+        );
+
+        *self.state.write().await = NetworkState::BootstrappingPhase;
+
+        // Phase 1: Start bootstrap nodes
+        self.start_bootstrap_nodes().await?;
+
+        // Phase 2: Start regular nodes
+        *self.state.write().await = NetworkState::NodeSpawningPhase;
+        self.start_regular_nodes().await?;
+
+        // Phase 3: Wait for network stabilization
+        *self.state.write().await = NetworkState::Stabilizing;
+        self.wait_for_stabilization().await?;
+
+        // Phase 4: Start health monitor
+        self.start_health_monitor();
+
+        *self.state.write().await = NetworkState::Ready;
+        info!("Test network is ready");
+        Ok(())
+    }
+
+    /// Start bootstrap nodes (first N nodes).
+    async fn start_bootstrap_nodes(&mut self) -> Result<()> {
+        info!("Starting {} bootstrap nodes", self.config.bootstrap_count);
+
+        for i in 0..self.config.bootstrap_count {
+            let node = self.create_node(i, true, vec![]).await?;
+            self.start_node(node).await?;
+
+            // Delay between spawns to prevent port conflicts
+            tokio::time::sleep(self.config.spawn_delay).await;
+        }
+
+        // Wait for bootstrap nodes to be ready
+        self.wait_for_nodes_ready(0..self.config.bootstrap_count)
+            .await?;
+
+        info!("All bootstrap nodes are ready");
+        Ok(())
+    }
+
+    /// Start regular nodes.
+    async fn start_regular_nodes(&mut self) -> Result<()> {
+        let regular_count = self.config.node_count - self.config.bootstrap_count;
+        info!("Starting {} regular nodes", regular_count);
+
+        // Get bootstrap addresses
+        let bootstrap_addrs: Vec<SocketAddr> = self.nodes[0..self.config.bootstrap_count]
+            .iter()
+            .map(|n| n.address)
+            .collect();
+
+        for i in self.config.bootstrap_count..self.config.node_count {
+            let node = self.create_node(i, false, bootstrap_addrs.clone()).await?;
+            self.start_node(node).await?;
+
+            // Staggered spawns to prevent overwhelming bootstrap nodes
+            tokio::time::sleep(self.config.spawn_delay).await;
+        }
+
+        info!("All regular nodes started");
+        Ok(())
+    }
+
+    /// Create a test node (but don't start it yet).
+    async fn create_node(
+        &self,
+        index: usize,
+        is_bootstrap: bool,
+        bootstrap_addrs: Vec<SocketAddr>,
+    ) -> Result<TestNode> {
+        let port = self.config.base_port + u16::try_from(index).unwrap_or(0);
+        let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
+        let node_id = format!("test_node_{index}");
+        let data_dir = self.config.test_data_dir.join(&node_id);
+
+        tokio::fs::create_dir_all(&data_dir).await?;
+
+        Ok(TestNode {
+            index,
+            node_id,
+            port,
+            address,
+            data_dir,
+            p2p_node: None,
+            is_bootstrap,
+            state: Arc::new(RwLock::new(NodeState::Pending)),
+            bootstrap_addrs,
+        })
+    }
+
+    /// Start a single node.
+    async fn start_node(&mut self, mut node: TestNode) -> Result<()> {
+        debug!("Starting node {} on port {}", node.index, node.port);
+        *node.state.write().await = NodeState::Starting;
+
+        // Build configuration for saorsa-core P2PNode
+        let mut core_config = CoreNodeConfig::new()
+            .map_err(|e| TestnetError::Core(format!("Failed to create core config: {e}")))?;
+
+        core_config.listen_addr = node.address;
+        core_config.listen_addrs = vec![node.address];
+        core_config
+            .bootstrap_peers
+            .clone_from(&node.bootstrap_addrs);
+
+        // Create and start the P2P node
+        let p2p_node = P2PNode::new(core_config).await.map_err(|e| {
+            TestnetError::Startup(format!("Failed to create node {}: {e}", node.index))
+        })?;
+
+        p2p_node.start().await.map_err(|e| {
+            TestnetError::Startup(format!("Failed to start node {}: {e}", node.index))
+        })?;
+
+        node.p2p_node = Some(Arc::new(p2p_node));
+        *node.state.write().await = NodeState::Running;
+
+        debug!("Node {} started successfully", node.index);
+        self.nodes.push(node);
+        Ok(())
+    }
+
+    /// Wait for specific nodes to reach ready state.
+    async fn wait_for_nodes_ready(&self, range: std::ops::Range<usize>) -> Result<()> {
+        let deadline = Instant::now() + self.config.node_startup_timeout;
+
+        for i in range {
+            while Instant::now() < deadline {
+                let state = self.nodes[i].state.read().await.clone();
+                match state {
+                    NodeState::Running | NodeState::Connected => break,
+                    NodeState::Failed(ref e) => {
+                        return Err(TestnetError::Startup(format!("Node {i} failed: {e}")));
+                    }
+                    _ => tokio::time::sleep(Duration::from_millis(100)).await,
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Wait for network to stabilize (all nodes connected).
+    async fn wait_for_stabilization(&self) -> Result<()> {
+        let deadline = Instant::now() + self.config.stabilization_timeout;
+        let min_connections = self.config.bootstrap_count.min(3);
+
+        info!(
+            "Waiting for network stabilization (min {} connections per node)",
+            min_connections
+        );
+
+        while Instant::now() < deadline {
+            let mut all_connected = true;
+            let mut total_connections = 0;
+
+            for node in &self.nodes {
+                let peer_count = node.peer_count().await;
+                total_connections += peer_count;
+
+                if peer_count < min_connections {
+                    all_connected = false;
+                }
+            }
+
+            if all_connected {
+                info!(
+                    "Network stabilized: {} total connections",
+                    total_connections
+                );
+                return Ok(());
+            }
+
+            debug!(
+                "Waiting for stabilization: {} total connections",
+                total_connections
+            );
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+
+        Err(TestnetError::Stabilization(
+            "Network failed to stabilize within timeout".to_string(),
+        ))
+    }
+
+    /// Start background health monitoring.
+    fn start_health_monitor(&mut self) {
+        let nodes: Vec<Arc<P2PNode>> = self
+            .nodes
+            .iter()
+            .filter_map(|n| n.p2p_node.clone())
+            .collect();
+        let _state = Arc::clone(&self.state);
+        let mut shutdown_rx = self.shutdown_tx.subscribe();
+
+        self.health_monitor = Some(tokio::spawn(async move {
+            let check_interval = Duration::from_secs(5);
+
+            loop {
+                tokio::select! {
+                    _ = shutdown_rx.recv() => break,
+                    () = tokio::time::sleep(check_interval) => {
+                        // Check each node's health
+                        for (i, node) in nodes.iter().enumerate() {
+                            if !node.is_running().await {
+                                warn!("Node {} appears unhealthy", i);
+                            }
+                        }
+                    }
+                }
+            }
+        }));
+    }
+
+    /// Shutdown the entire test network.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if cleanup fails.
+    pub async fn shutdown(&mut self) -> Result<()> {
+        info!("Shutting down test network");
+        *self.state.write().await = NetworkState::ShuttingDown;
+
+        // Signal all background tasks to stop
+        let _ = self.shutdown_tx.send(());
+
+        // Stop health monitor
+        if let Some(handle) = self.health_monitor.take() {
+            handle.abort();
+        }
+
+        // Stop all nodes in reverse order
+        for node in self.nodes.iter_mut().rev() {
+            debug!("Stopping node {}", node.index);
+            if let Some(ref p2p) = node.p2p_node {
+                if let Err(e) = p2p.shutdown().await {
+                    warn!("Error shutting down node {}: {}", node.index, e);
+                }
+            }
+            *node.state.write().await = NodeState::Stopped;
+        }
+
+        // Cleanup test data directory
+        if let Err(e) = tokio::fs::remove_dir_all(&self.config.test_data_dir).await {
+            warn!("Failed to cleanup test data directory: {}", e);
+        }
+
+        *self.state.write().await = NetworkState::Stopped;
+        info!("Test network shutdown complete");
+        Ok(())
+    }
+
+    /// Get a reference to a specific node.
+    #[must_use]
+    pub fn node(&self, index: usize) -> Option<&TestNode> {
+        self.nodes.get(index)
+    }
+
+    /// Get a mutable reference to a specific node.
+    #[must_use]
+    pub fn node_mut(&mut self, index: usize) -> Option<&mut TestNode> {
+        self.nodes.get_mut(index)
+    }
+
+    /// Get all nodes.
+    #[must_use]
+    pub fn nodes(&self) -> &[TestNode] {
+        &self.nodes
+    }
+
+    /// Get bootstrap nodes.
+    #[must_use]
+    pub fn bootstrap_nodes(&self) -> &[TestNode] {
+        &self.nodes[0..self.config.bootstrap_count.min(self.nodes.len())]
+    }
+
+    /// Get regular (non-bootstrap) nodes.
+    #[must_use]
+    pub fn regular_nodes(&self) -> &[TestNode] {
+        if self.nodes.len() > self.config.bootstrap_count {
+            &self.nodes[self.config.bootstrap_count..]
+        } else {
+            &[]
+        }
+    }
+
+    /// Get current network state.
+    pub async fn state(&self) -> NetworkState {
+        self.state.read().await.clone()
+    }
+
+    /// Check if network is ready.
+    pub async fn is_ready(&self) -> bool {
+        matches!(self.state().await, NetworkState::Ready)
+    }
+
+    /// Get total peer connections across all nodes.
+    pub async fn total_connections(&self) -> usize {
+        let mut total = 0;
+        for node in &self.nodes {
+            total += node.peer_count().await;
+        }
+        total
+    }
+
+    /// Get the number of nodes.
+    #[must_use]
+    pub fn node_count(&self) -> usize {
+        self.nodes.len()
+    }
+
+    /// Get the configuration.
+    #[must_use]
+    pub fn config(&self) -> &TestNetworkConfig {
+        &self.config
+    }
+}
+
+impl Drop for TestNetwork {
+    fn drop(&mut self) {
+        // Best-effort synchronous cleanup
+        // Note: async cleanup should be done via shutdown() before dropping
+        let _ = self.shutdown_tx.send(());
+
+        // Abort health monitor if still running
+        if let Some(handle) = self.health_monitor.take() {
+            handle.abort();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_config_defaults() {
+        let config = TestNetworkConfig::default();
+        assert_eq!(config.node_count, 25);
+        assert_eq!(config.base_port, 19000);
+        assert_eq!(config.bootstrap_count, 3);
+    }
+
+    #[test]
+    fn test_config_minimal() {
+        let config = TestNetworkConfig::minimal();
+        assert_eq!(config.node_count, 5);
+        assert_eq!(config.bootstrap_count, 2);
+    }
+
+    #[test]
+    fn test_network_state_is_running() {
+        assert!(!NetworkState::Uninitialized.is_running());
+        assert!(NetworkState::Ready.is_running());
+        assert!(NetworkState::Stabilizing.is_running());
+        assert!(!NetworkState::Stopped.is_running());
+    }
+
+    #[tokio::test]
+    async fn test_invalid_bootstrap_count_rejected() {
+        let config = TestNetworkConfig {
+            node_count: 5,
+            bootstrap_count: 5, // Invalid: must be less than node_count
+            ..Default::default()
+        };
+
+        let result = TestNetwork::new(config).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_zero_bootstrap_rejected() {
+        let config = TestNetworkConfig {
+            node_count: 5,
+            bootstrap_count: 0, // Invalid: must have at least one
+            ..Default::default()
+        };
+
+        let result = TestNetwork::new(config).await;
+        assert!(result.is_err());
+    }
+}

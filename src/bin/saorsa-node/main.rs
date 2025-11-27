@@ -18,8 +18,7 @@ async fn main() -> color_eyre::Result<()> {
 
     // Initialize tracing
     let log_level: String = cli.log_level.into();
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(&log_level));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&log_level));
 
     tracing_subscriber::registry()
         .with(fmt::layer())

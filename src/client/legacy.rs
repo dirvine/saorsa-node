@@ -10,7 +10,9 @@
 //! - **Trust existing verification**: autonomi network already verified BLS signatures
 //! - **Migration path**: Retrieved data is re-encrypted with PQC before storing on saorsa
 
-use super::data_types::{DataChunk, DataSource, GraphEntry, PointerRecord, ScratchpadEntry, XorName};
+use super::data_types::{
+    DataChunk, DataSource, GraphEntry, PointerRecord, ScratchpadEntry, XorName,
+};
 use crate::error::Result;
 use bytes::Bytes;
 use tracing::debug;
@@ -47,6 +49,8 @@ pub struct LegacyClient {
     // For now, we provide the interface without the full implementation
 }
 
+// TODO: Remove this allow once the async methods are fully implemented
+#[allow(clippy::unused_async)]
 impl LegacyClient {
     /// Create a new legacy client with the given configuration.
     #[must_use]
@@ -65,7 +69,7 @@ impl LegacyClient {
     ///
     /// # Arguments
     ///
-    /// * `address` - The XorName address of the chunk
+    /// * `address` - The `XorName` address of the chunk
     ///
     /// # Returns
     ///
@@ -75,7 +79,10 @@ impl LegacyClient {
     ///
     /// Returns an error if the network operation fails.
     pub async fn get_chunk(&self, address: &XorName) -> Result<Option<DataChunk>> {
-        debug!("Querying autonomi network for chunk: {}", hex::encode(address));
+        debug!(
+            "Querying autonomi network for chunk: {}",
+            hex::encode(address)
+        );
 
         // In a full implementation, this would:
         // 1. Create an autonomi::Client connection
@@ -157,7 +164,7 @@ impl LegacyClient {
     ///
     /// # Arguments
     ///
-    /// * `address` - The XorName address of the graph entry
+    /// * `address` - The `XorName` address of the graph entry
     ///
     /// # Returns
     ///
@@ -185,7 +192,7 @@ impl LegacyClient {
     ///
     /// # Arguments
     ///
-    /// * `address` - The XorName to check
+    /// * `address` - The `XorName` to check
     ///
     /// # Returns
     ///
@@ -212,7 +219,7 @@ impl LegacyClient {
     ///
     /// # Arguments
     ///
-    /// * `address` - The XorName address
+    /// * `address` - The `XorName` address
     ///
     /// # Returns
     ///
@@ -237,7 +244,7 @@ impl LegacyClient {
     }
 }
 
-/// Convert autonomi chunk to our unified DataChunk.
+/// Convert autonomi chunk to our unified `DataChunk`.
 ///
 /// This function takes raw autonomi chunk data and wraps it in our unified type.
 #[must_use]
@@ -246,7 +253,7 @@ pub fn wrap_autonomi_chunk(address: XorName, content: Bytes) -> DataChunk {
     DataChunk::new(address, content, DataSource::Autonomi)
 }
 
-/// Convert autonomi scratchpad to our unified ScratchpadEntry.
+/// Convert autonomi scratchpad to our unified `ScratchpadEntry`.
 ///
 /// This function takes raw autonomi scratchpad data and wraps it in our unified type.
 #[must_use]

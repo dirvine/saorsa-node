@@ -186,7 +186,10 @@ mod tests {
         assert!(!verifier.is_enabled());
 
         let xorname = [1u8; 32];
-        let result = verifier.data_exists(&xorname).await.expect("should succeed");
+        let result = verifier
+            .data_exists(&xorname)
+            .await
+            .expect("should succeed");
         assert!(!result); // Disabled verifier always returns false
     }
 

@@ -41,7 +41,12 @@ pub struct Cli {
     pub auto_upgrade: bool,
 
     /// Release channel for upgrades.
-    #[arg(long, value_enum, default_value = "stable", env = "SAORSA_UPGRADE_CHANNEL")]
+    #[arg(
+        long,
+        value_enum,
+        default_value = "stable",
+        env = "SAORSA_UPGRADE_CHANNEL"
+    )]
     pub upgrade_channel: CliUpgradeChannel,
 
     /// Disable payment verification (require payment for all data).

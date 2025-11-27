@@ -87,7 +87,10 @@ impl AntDataMigrator {
             )));
         }
 
-        info!("Created migrator for ant-node data at: {}", ant_data_dir.display());
+        info!(
+            "Created migrator for ant-node data at: {}",
+            ant_data_dir.display()
+        );
         Ok(Self {
             ant_data_dir,
             master_key: None,
@@ -325,11 +328,11 @@ impl AntDataMigrator {
         Ok(ProcessResult::Migrated)
     }
 
-    /// Extract XorName from a record file path.
+    /// Extract `XorName` from a record file path.
     ///
     /// ant-node stores records with paths like:
     /// `record_store/aa/aabbccdd.../record`
-    /// where the directory name is the hex-encoded XorName.
+    /// where the directory name is the hex-encoded `XorName`.
     fn extract_xorname_from_path(path: &std::path::Path) -> Option<[u8; 32]> {
         // Try to get the parent directory name (which may contain the XorName)
         let parent = path.parent()?;

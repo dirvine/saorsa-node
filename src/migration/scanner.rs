@@ -39,7 +39,10 @@ pub fn find_ant_node_data_dirs() -> Vec<PathBuf> {
     if let Ok(path) = std::env::var("ANT_NODE_DATA_DIR") {
         let path = PathBuf::from(path);
         if path.exists() && path.is_dir() && !found.contains(&path) {
-            debug!("Found ant-node data via ANT_NODE_DATA_DIR: {}", path.display());
+            debug!(
+                "Found ant-node data via ANT_NODE_DATA_DIR: {}",
+                path.display()
+            );
             found.push(path);
         }
     }

@@ -138,10 +138,7 @@ impl PaymentVerifier {
     pub async fn check_payment_required(&self, xorname: &XorName) -> PaymentStatus {
         // Step 1: Check LRU cache (fast path)
         if self.cache.contains(xorname) {
-            debug!(
-                "Data {} found in verified cache",
-                hex::encode(xorname)
-            );
+            debug!("Data {} found in verified cache", hex::encode(xorname));
             return PaymentStatus::CachedAsVerified;
         }
 
@@ -166,11 +163,7 @@ impl PaymentVerifier {
             }
             Err(e) => {
                 // Network error - decide based on config
-                warn!(
-                    "Autonomi lookup failed for {}: {}",
-                    hex::encode(xorname),
-                    e
-                );
+                warn!("Autonomi lookup failed for {}: {}", hex::encode(xorname), e);
                 if self.config.require_payment_on_error {
                     PaymentStatus::PaymentRequired
                 } else {
@@ -224,9 +217,10 @@ impl PaymentVerifier {
                         }
 
                         // Deserialize the ProofOfPayment
-                        let payment: ProofOfPayment = rmp_serde::from_slice(proof).map_err(|e| {
-                            Error::Payment(format!("Failed to deserialize payment proof: {e}"))
-                        })?;
+                        let payment: ProofOfPayment =
+                            rmp_serde::from_slice(proof).map_err(|e| {
+                                Error::Payment(format!("Failed to deserialize payment proof: {e}"))
+                            })?;
 
                         // Verify the payment using EVM
                         self.verify_evm_payment(xorname, &payment).await?;
@@ -296,9 +290,9 @@ impl PaymentVerifier {
 
         // Verify quote signatures first (doesn't require network)
         for (encoded_peer_id, quote) in &payment.peer_quotes {
-            let peer_id = encoded_peer_id.to_peer_id().map_err(|e| {
-                Error::Payment(format!("Invalid peer ID in payment proof: {e}"))
-            })?;
+            let peer_id = encoded_peer_id
+                .to_peer_id()
+                .map_err(|e| Error::Payment(format!("Invalid peer ID in payment proof: {e}")))?;
 
             if !quote.check_is_signed_by_claimed_peer(peer_id) {
                 return Err(Error::Payment(format!(
@@ -326,10 +320,7 @@ impl PaymentVerifier {
         .await
         {
             Ok(_amount) => {
-                info!(
-                    "EVM payment verified for {}",
-                    hex::encode(xorname)
-                );
+                info!("EVM payment verified for {}", hex::encode(xorname));
                 Ok(())
             }
             Err(evmlib::contract::payment_vault::error::Error::PaymentInvalid) => {
@@ -406,9 +397,10 @@ mod tests {
         let xorname = [1u8; 32];
 
         // Create a valid (but empty) ProofOfPayment
-        let proof = ProofOfPayment { peer_quotes: vec![] };
-        let proof_bytes =
-            rmp_serde::to_vec(&proof).expect("should serialize");
+        let proof = ProofOfPayment {
+            peer_quotes: vec![],
+        };
+        let proof_bytes = rmp_serde::to_vec(&proof).expect("should serialize");
 
         // Should succeed with a valid proof when EVM verification is disabled
         // Note: With EVM verification disabled, even empty proofs pass
