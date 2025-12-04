@@ -1,5 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
-<?define Version = "$(var.ProductVersion)" ?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
     <Product
         Id="*"
@@ -13,12 +12,12 @@
             InstallerVersion="500"
             Compressed="yes"
             InstallScope="perMachine"
+            Platform="x64"
             Description="Saorsa Node - Quantum-proof decentralized network node"
             Comments="Pure post-quantum cryptography network node"/>
 
         <MajorUpgrade
-            DowngradeErrorMessage="A newer version of Saorsa Node is already installed."
-            AllowSameVersionUpgrades="yes"/>
+            DowngradeErrorMessage="A newer version of Saorsa Node is already installed."/>
 
         <MediaTemplate EmbedCab="yes"/>
 
@@ -29,7 +28,7 @@
 
         <Feature Id="MainFeature" Title="Saorsa Node" Level="1">
             <ComponentGroupRef Id="BinariesGroup"/>
-            <ComponentGroupRef Id="PathEnvGroup"/>
+            <ComponentRef Id="PathEnvComponent"/>
         </Feature>
 
         <UIRef Id="WixUI_InstallDir"/>
@@ -46,9 +45,6 @@
                 <Directory Id="INSTALLFOLDER" Name="Saorsa">
                     <Directory Id="BinFolder" Name="bin"/>
                 </Directory>
-            </Directory>
-            <Directory Id="ProgramMenuFolder">
-                <Directory Id="SaorsaMenuFolder" Name="Saorsa"/>
             </Directory>
         </Directory>
     </Fragment>
@@ -67,16 +63,15 @@
             </Component>
         </ComponentGroup>
 
-        <ComponentGroup Id="PathEnvGroup" Directory="BinFolder">
-            <Component Id="PathEnvComponent" Guid="7C8B6A5D-4E3F-2B1A-9C0D-8E7F6A5B4C3D" Win64="yes">
-                <Environment Id="PATH"
-                             Name="PATH"
-                             Value="[BinFolder]"
-                             Permanent="no"
-                             Part="last"
-                             Action="set"
-                             System="yes"/>
-            </Component>
-        </ComponentGroup>
+        <Component Id="PathEnvComponent" Directory="BinFolder" Guid="7C8B6A5D-4E3F-2B1A-9C0D-8E7F6A5B4C3D" Win64="yes">
+            <CreateFolder/>
+            <Environment Id="PATH"
+                         Name="PATH"
+                         Value="[BinFolder]"
+                         Permanent="no"
+                         Part="last"
+                         Action="set"
+                         System="yes"/>
+        </Component>
     </Fragment>
 </Wix>
