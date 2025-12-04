@@ -1,34 +1,90 @@
-//! ML-DSA-65 keypair generator for saorsa-node release signing.
+//! ML-DSA-65 key management utility for saorsa-node release signing.
 //!
-//! This utility generates a new ML-DSA-65 keypair and outputs:
-//! - Public key as a Rust array literal (for embedding in signature.rs)
-//! - Private key saved to a file (for CI/CD signing)
+//! This utility provides:
+//! - Keypair generation for release signing
+//! - Binary signing with ML-DSA-65
+//! - Signature verification
 //!
 //! Usage:
-//!   cargo run --bin saorsa-keygen [output-dir]
+//!   saorsa-keygen generate [output-dir]    Generate a new keypair
+//!   saorsa-keygen sign --key <key> --input <file> --output <sig>
+//!   saorsa-keygen verify --key <key> --input <file> --signature <sig>
 
 // This is a standalone CLI tool that exits on any error, so expect/unwrap is acceptable
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use saorsa_pqc::api::sig::ml_dsa_65;
-use std::env;
+use clap::{Parser, Subcommand};
+use saorsa_pqc::api::sig::{ml_dsa_65, MlDsaPublicKey, MlDsaSecretKey, MlDsaSignature, MlDsaVariant};
 use std::fs;
 use std::io::Write;
-use std::path::Path;
+use std::path::PathBuf;
+use std::process;
+
+/// Signing context for domain separation (prevents cross-protocol attacks).
+const SIGNING_CONTEXT: &[u8] = b"saorsa-node-release-v1";
+
+#[derive(Parser)]
+#[command(name = "saorsa-keygen")]
+#[command(about = "ML-DSA-65 key management for saorsa-node releases")]
+#[command(version)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Generate a new ML-DSA-65 keypair
+    Generate {
+        /// Output directory for keys
+        #[arg(default_value = ".")]
+        output_dir: PathBuf,
+    },
+    /// Sign a file with ML-DSA-65
+    Sign {
+        /// Path to the secret key file
+        #[arg(short, long)]
+        key: PathBuf,
+        /// Path to the file to sign
+        #[arg(short, long)]
+        input: PathBuf,
+        /// Path to write the signature
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+    /// Verify a signature
+    Verify {
+        /// Path to the public key file
+        #[arg(short, long)]
+        key: PathBuf,
+        /// Path to the file that was signed
+        #[arg(short, long)]
+        input: PathBuf,
+        /// Path to the signature file
+        #[arg(short, long)]
+        signature: PathBuf,
+    },
+}
 
 fn main() {
+    let cli = Cli::parse();
+
+    match cli.command {
+        Commands::Generate { output_dir } => generate_keypair(&output_dir),
+        Commands::Sign { key, input, output } => sign_file(&key, &input, &output),
+        Commands::Verify {
+            key,
+            input,
+            signature,
+        } => verify_signature(&key, &input, &signature),
+    }
+}
+
+fn generate_keypair(output_dir: &PathBuf) {
     println!("ML-DSA-65 Keypair Generator for saorsa-node releases\n");
 
-    // Get output directory from args or use current directory
-    let args: Vec<String> = env::args().collect();
-    let output_dir = if args.len() > 1 {
-        Path::new(&args[1]).to_path_buf()
-    } else {
-        env::current_dir().expect("Failed to get current directory")
-    };
-
     // Create output directory if it doesn't exist
-    fs::create_dir_all(&output_dir).expect("Failed to create output directory");
+    fs::create_dir_all(output_dir).expect("Failed to create output directory");
 
     println!("Generating ML-DSA-65 keypair...");
 
@@ -124,4 +180,69 @@ fn main() {
 
     println!("\n--- End of Rust code ---");
     println!("\nDone! Copy the above code to src/upgrade/signature.rs");
+}
+
+fn sign_file(key_path: &PathBuf, input_path: &PathBuf, output_path: &PathBuf) {
+    println!("Signing {} with ML-DSA-65...", input_path.display());
+
+    // Load secret key
+    let sk_bytes = fs::read(key_path).expect("Failed to read secret key");
+
+    // Parse secret key
+    let secret_key = MlDsaSecretKey::from_bytes(MlDsaVariant::MlDsa65, &sk_bytes)
+        .expect("Failed to parse secret key");
+
+    // Load file to sign
+    let data = fs::read(input_path).expect("Failed to read input file");
+
+    // Create DSA instance and sign with context
+    let dsa = ml_dsa_65();
+    let signature = dsa
+        .sign_with_context(&secret_key, &data, SIGNING_CONTEXT)
+        .expect("Failed to create signature");
+
+    let sig_bytes = signature.to_bytes();
+
+    // Write signature
+    fs::write(output_path, &sig_bytes).expect("Failed to write signature");
+
+    println!("Signature written to: {}", output_path.display());
+    println!("  Signature size: {} bytes", sig_bytes.len());
+}
+
+fn verify_signature(key_path: &PathBuf, input_path: &PathBuf, sig_path: &PathBuf) {
+    println!("Verifying signature for {}...", input_path.display());
+
+    // Load public key
+    let pk_bytes = fs::read(key_path).expect("Failed to read public key");
+
+    // Parse public key
+    let public_key = MlDsaPublicKey::from_bytes(MlDsaVariant::MlDsa65, &pk_bytes)
+        .expect("Failed to parse public key");
+
+    // Load file that was signed
+    let data = fs::read(input_path).expect("Failed to read input file");
+
+    // Load signature
+    let sig_bytes = fs::read(sig_path).expect("Failed to read signature");
+
+    // Parse signature
+    let signature = MlDsaSignature::from_bytes(MlDsaVariant::MlDsa65, &sig_bytes)
+        .expect("Failed to parse signature");
+
+    // Create DSA instance and verify with context
+    let dsa = ml_dsa_65();
+    match dsa.verify_with_context(&public_key, &data, &signature, SIGNING_CONTEXT) {
+        Ok(true) => {
+            println!("Signature is VALID");
+        }
+        Ok(false) => {
+            eprintln!("Signature is INVALID");
+            process::exit(1);
+        }
+        Err(e) => {
+            eprintln!("Signature verification error: {e}");
+            process::exit(1);
+        }
+    }
 }

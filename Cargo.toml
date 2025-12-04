@@ -24,8 +24,9 @@ path = "src/bin/keygen.rs"
 
 [dependencies]
 # Core (provides EVERYTHING: networking, DHT, security, trust, storage)
-saorsa-core = { path = "../saorsa-core" }
-saorsa-pqc = { path = "../saorsa-pqc" }
+# Published version from crates.io (v0.7.1 with auto-upgrade system)
+saorsa-core = "0.7.1"
+saorsa-pqc = "0.3.12"
 
 # Payment verification - autonomi network lookup + EVM payment
 autonomi = { path = "../autonomi/autonomi" }
@@ -118,3 +119,39 @@ unused_async = "allow"
 cognitive_complexity = "allow"
 # Allow non-const functions during initial development (may need runtime features later)
 missing_const_for_fn = "allow"
+
+# Debian package metadata (cargo-deb)
+[package.metadata.deb]
+maintainer = "David Irvine <david.irvine@maidsafe.net>"
+copyright = "2024-2025 Saorsa Labs"
+license-file = ["LICENSE-MIT", "0"]
+extended-description = """
+Saorsa Node is a pure quantum-proof network node for the Saorsa decentralized network.
+It provides secure, private, and censorship-resistant data storage using post-quantum
+cryptography (ML-DSA-65, ML-KEM-768). Features include:
+- Quantum-resistant authentication and encryption
+- Distributed Hash Table (DHT) with anti-Sybil protection
+- Automatic upgrades with staged rollout
+- Bootstrap node support for testnet deployment
+"""
+section = "net"
+priority = "optional"
+assets = [
+    ["target/release/saorsa-node", "usr/bin/", "755"],
+    ["target/release/saorsa-keygen", "usr/bin/", "755"],
+    ["README.md", "usr/share/doc/saorsa-node/", "644"],
+]
+conf-files = ["/etc/saorsa/config.toml"]
+depends = "$auto"
+systemd-units = { enable = true }
+
+# RPM package metadata (cargo-generate-rpm)
+[package.metadata.generate-rpm]
+assets = [
+    { source = "target/release/saorsa-node", dest = "/usr/bin/saorsa-node", mode = "755" },
+    { source = "target/release/saorsa-keygen", dest = "/usr/bin/saorsa-keygen", mode = "755" },
+    { source = "README.md", dest = "/usr/share/doc/saorsa-node/README.md", mode = "644" },
+]
+
+[package.metadata.generate-rpm.requires]
+# Runtime dependencies auto-detected

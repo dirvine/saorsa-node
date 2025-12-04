@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+    <Product
+        Id="*"
+        Name="Saorsa Node"
+        Language="1033"
+        Version="!(bind.FileVersion.SaorsaNodeExe)"
+        Manufacturer="Saorsa Labs"
+        UpgradeCode="E8A7B5F2-3C9D-4E1A-B2F8-7D6C5A4E3B2D">
+
+        <Package
+            InstallerVersion="500"
+            Compressed="yes"
+            InstallScope="perMachine"
+            Description="Saorsa Node - Quantum-proof decentralized network node"
+            Comments="Pure post-quantum cryptography network node"/>
+
+        <MajorUpgrade
+            DowngradeErrorMessage="A newer version of Saorsa Node is already installed."
+            AllowSameVersionUpgrades="yes"/>
+
+        <MediaTemplate EmbedCab="yes"/>
+
+        <Icon Id="SaorsaIcon" SourceFile="wix\saorsa.ico"/>
+        <Property Id="ARPPRODUCTICON" Value="SaorsaIcon"/>
+        <Property Id="ARPHELPLINK" Value="https://github.com/dirvine/saorsa-node"/>
+        <Property Id="ARPURLINFOABOUT" Value="https://github.com/dirvine/saorsa-node"/>
+
+        <Feature Id="MainFeature" Title="Saorsa Node" Level="1">
+            <ComponentGroupRef Id="BinariesGroup"/>
+            <ComponentGroupRef Id="PathEnvGroup"/>
+        </Feature>
+
+        <UIRef Id="WixUI_InstallDir"/>
+        <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER"/>
+
+        <WixVariable Id="WixUILicenseRtf" Value="wix\license.rtf"/>
+        <WixVariable Id="WixUIBannerBmp" Value="wix\banner.bmp"/>
+        <WixVariable Id="WixUIDialogBmp" Value="wix\dialog.bmp"/>
+    </Product>
+
+    <Fragment>
+        <Directory Id="TARGETDIR" Name="SourceDir">
+            <Directory Id="ProgramFiles64Folder">
+                <Directory Id="INSTALLFOLDER" Name="Saorsa">
+                    <Directory Id="BinFolder" Name="bin"/>
+                </Directory>
+            </Directory>
+            <Directory Id="ProgramMenuFolder">
+                <Directory Id="SaorsaMenuFolder" Name="Saorsa"/>
+            </Directory>
+        </Directory>
+    </Fragment>
+
+    <Fragment>
+        <ComponentGroup Id="BinariesGroup" Directory="BinFolder">
+            <Component Id="SaorsaNodeComponent" Guid="*" Win64="yes">
+                <File Id="SaorsaNodeExe"
+                      Source="target\x86_64-pc-windows-msvc\release\saorsa-node.exe"
+                      KeyPath="yes"/>
+            </Component>
+            <Component Id="SaorsaKeygenComponent" Guid="*" Win64="yes">
+                <File Id="SaorsaKeygenExe"
+                      Source="target\x86_64-pc-windows-msvc\release\saorsa-keygen.exe"
+                      KeyPath="yes"/>
+            </Component>
+        </ComponentGroup>
+
+        <ComponentGroup Id="PathEnvGroup" Directory="BinFolder">
+            <Component Id="PathEnvComponent" Guid="7C8B6A5D-4E3F-2B1A-9C0D-8E7F6A5B4C3D" Win64="yes">
+                <Environment Id="PATH"
+                             Name="PATH"
+                             Value="[BinFolder]"
+                             Permanent="no"
+                             Part="last"
+                             Action="set"
+                             System="yes"/>
+            </Component>
+        </ComponentGroup>
+    </Fragment>
+</Wix>

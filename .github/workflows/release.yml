@@ -1,0 +1,356 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            binary: saorsa-node
+            archive: tar.gz
+            friendly_name: linux-x64
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            binary: saorsa-node
+            archive: tar.gz
+            cross: true
+            friendly_name: linux-arm64
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            binary: saorsa-node
+            archive: tar.gz
+            friendly_name: macos-x64
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            binary: saorsa-node
+            archive: tar.gz
+            friendly_name: macos-arm64
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            binary: saorsa-node.exe
+            archive: zip
+            friendly_name: windows-x64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install cross (Linux ARM64)
+        if: matrix.cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build (cross)
+        if: matrix.cross
+        run: cross build --release --target ${{ matrix.target }}
+
+      - name: Build (native)
+        if: ${{ !matrix.cross }}
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Create archive (Unix)
+        if: matrix.archive == 'tar.gz'
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar -czvf ../../../saorsa-node-cli-${{ matrix.friendly_name }}.tar.gz ${{ matrix.binary }} saorsa-keygen
+          cd ../../..
+
+      - name: Create archive (Windows)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "target/${{ matrix.target }}/release/${{ matrix.binary }}", "target/${{ matrix.target }}/release/saorsa-keygen.exe" -DestinationPath "saorsa-node-cli-${{ matrix.friendly_name }}.zip"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.friendly_name }}
+          path: saorsa-node-cli-${{ matrix.friendly_name }}.${{ matrix.archive }}
+          retention-days: 1
+
+  installers-linux:
+    name: Build Linux Installers
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-deb
+        run: cargo install cargo-deb
+
+      - name: Install cargo-generate-rpm
+        run: cargo install cargo-generate-rpm
+
+      - name: Build release binaries
+        run: cargo build --release
+
+      - name: Build .deb package
+        run: cargo deb --no-build --output saorsa-node.deb
+
+      - name: Build .rpm package
+        run: cargo generate-rpm --output saorsa-node.rpm
+
+      - name: Upload .deb
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-deb
+          path: saorsa-node.deb
+          retention-days: 1
+
+      - name: Upload .rpm
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-rpm
+          path: saorsa-node.rpm
+          retention-days: 1
+
+  installers-windows:
+    name: Build Windows Installer
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build release binaries
+        run: cargo build --release --target x86_64-pc-windows-msvc
+
+      - name: Install WiX Toolset
+        run: |
+          choco install wixtoolset -y
+          echo "C:\Program Files (x86)\WiX Toolset v3.14\bin" >> $env:GITHUB_PATH
+
+      - name: Build MSI installer
+        shell: pwsh
+        run: |
+          # Create placeholder images if they don't exist
+          if (-not (Test-Path "wix\banner.bmp")) {
+            # Create a simple 493x58 banner
+            Add-Type -AssemblyName System.Drawing
+            $bmp = New-Object System.Drawing.Bitmap(493, 58)
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.Clear([System.Drawing.Color]::FromArgb(0, 120, 212))
+            $bmp.Save("wix\banner.bmp")
+          }
+          if (-not (Test-Path "wix\dialog.bmp")) {
+            # Create a simple 493x312 dialog
+            Add-Type -AssemblyName System.Drawing
+            $bmp = New-Object System.Drawing.Bitmap(493, 312)
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.Clear([System.Drawing.Color]::FromArgb(0, 120, 212))
+            $bmp.Save("wix\dialog.bmp")
+          }
+          if (-not (Test-Path "wix\saorsa.ico")) {
+            # Use a default icon
+            Copy-Item "C:\Windows\System32\shell32.dll" -Destination "wix\temp.dll"
+            Add-Type -AssemblyName System.Drawing
+            $icon = [System.Drawing.Icon]::ExtractAssociatedIcon("C:\Windows\System32\cmd.exe")
+            $stream = [System.IO.File]::Create("wix\saorsa.ico")
+            $icon.Save($stream)
+            $stream.Close()
+          }
+
+          candle.exe wix\main.wxs -o wix\main.wixobj -ext WixUIExtension
+          light.exe wix\main.wixobj -o saorsa-node.msi -ext WixUIExtension
+
+      - name: Upload MSI
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-msi
+          path: saorsa-node.msi
+          retention-days: 1
+
+  sign:
+    name: Sign Releases
+    needs: [build, installers-linux, installers-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la artifacts/
+
+      - name: Decode signing key
+        run: |
+          echo "${{ secrets.SAORSA_NODE_SIGNING_KEY }}" | xxd -r -p > /tmp/signing-key.secret
+          chmod 600 /tmp/signing-key.secret
+
+      - name: Build signing tool
+        run: cargo build --release --bin saorsa-keygen
+
+      - name: Sign all release files
+        run: |
+          for file in artifacts/saorsa-node-cli-*.tar.gz artifacts/saorsa-node-cli-*.zip artifacts/*.deb artifacts/*.rpm artifacts/*.msi; do
+            if [ -f "$file" ]; then
+              echo "Signing $file..."
+              ./target/release/saorsa-keygen sign \
+                --key /tmp/signing-key.secret \
+                --input "$file" \
+                --output "${file}.sig"
+            fi
+          done
+
+      - name: Clean up signing key
+        if: always()
+        run: rm -f /tmp/signing-key.secret
+
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          sha256sum saorsa-node-cli-* *.deb *.rpm *.msi 2>/dev/null > SHA256SUMS.txt || true
+          cat SHA256SUMS.txt
+
+      - name: Upload signed artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: signed-releases
+          path: |
+            artifacts/*
+          retention-days: 1
+
+  release:
+    name: Create Release
+    needs: sign
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download signed artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: signed-releases
+          path: release
+
+      - name: List release files
+        run: ls -la release/
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Saorsa Node ${{ steps.version.outputs.version }}
+          body: |
+            ## Saorsa Node ${{ steps.version.outputs.version }}
+
+            ### CLI Downloads (Manual Installation)
+
+            Download, extract, and run directly from command line:
+
+            | Platform | Download |
+            |----------|----------|
+            | Linux x64 | `saorsa-node-cli-linux-x64.tar.gz` |
+            | Linux ARM64 | `saorsa-node-cli-linux-arm64.tar.gz` |
+            | macOS x64 | `saorsa-node-cli-macos-x64.tar.gz` |
+            | macOS ARM64 (Apple Silicon) | `saorsa-node-cli-macos-arm64.tar.gz` |
+            | Windows x64 | `saorsa-node-cli-windows-x64.zip` |
+
+            **CLI Usage:**
+            ```bash
+            # Linux/macOS
+            tar -xzf saorsa-node-cli-linux-x64.tar.gz
+            ./saorsa-node --testnet
+
+            # Windows (PowerShell)
+            Expand-Archive saorsa-node-cli-windows-x64.zip
+            .\saorsa-node.exe --testnet
+            ```
+
+            ### Service Installers (Automatic Startup)
+
+            Install as a system service with automatic startup:
+
+            | Platform | Download |
+            |----------|----------|
+            | Debian/Ubuntu | `saorsa-node.deb` |
+            | RHEL/Fedora | `saorsa-node.rpm` |
+            | Windows | `saorsa-node.msi` |
+
+            **Service Installation:**
+            ```bash
+            # Debian/Ubuntu
+            sudo dpkg -i saorsa-node.deb
+            sudo systemctl enable --now saorsa-node
+
+            # RHEL/Fedora
+            sudo rpm -i saorsa-node.rpm
+            sudo systemctl enable --now saorsa-node
+
+            # Windows: Run saorsa-node.msi installer
+            ```
+
+            ### Verification
+
+            All downloads are signed with ML-DSA-65 (FIPS 204) post-quantum signatures.
+            Download the corresponding `.sig` file and verify:
+
+            ```bash
+            saorsa-keygen verify --key release-signing-key.pub --input <file> --signature <file>.sig
+            ```
+
+            SHA256 checksums provided in `SHA256SUMS.txt`.
+
+            ### Auto-Upgrade
+
+            Running nodes automatically detect and upgrade to this version
+            within a 24-hour staged rollout window.
+          files: |
+            release/saorsa-node-cli-*.tar.gz
+            release/saorsa-node-cli-*.zip
+            release/saorsa-node-cli-*.sig
+            release/*.deb
+            release/*.rpm
+            release/*.msi
+            release/*.deb.sig
+            release/*.rpm.sig
+            release/*.msi.sig
+            release/SHA256SUMS.txt
+          draft: false
+          prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

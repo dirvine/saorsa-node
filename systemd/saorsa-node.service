@@ -1,0 +1,33 @@
+[Unit]
+Description=Saorsa Node - Quantum-proof decentralized network node
+Documentation=https://github.com/dirvine/saorsa-node
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=saorsa
+Group=saorsa
+ExecStart=/usr/bin/saorsa-node --config /etc/saorsa/config.toml
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ReadWritePaths=/var/lib/saorsa /var/log/saorsa
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+
+[Install]
+WantedBy=multi-user.target

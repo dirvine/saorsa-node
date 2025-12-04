@@ -28,6 +28,64 @@ pub enum UpgradeChannel {
     Beta,
 }
 
+/// Network mode for different deployment scenarios.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NetworkMode {
+    /// Production mode with full anti-Sybil protection.
+    #[default]
+    Production,
+    /// Testnet mode with relaxed diversity requirements.
+    /// Suitable for single-provider deployments (e.g., Digital Ocean).
+    Testnet,
+    /// Development mode with minimal restrictions.
+    /// Only use for local testing.
+    Development,
+}
+
+/// Testnet-specific configuration for relaxed anti-Sybil protection.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TestnetConfig {
+    /// Maximum nodes allowed per ASN.
+    /// Default: 5000 (compared to 20 in production).
+    #[serde(default = "default_testnet_max_per_asn")]
+    pub max_nodes_per_asn: usize,
+
+    /// Maximum nodes allowed per /64 subnet.
+    /// Default: 100 (compared to 1 in production).
+    #[serde(default = "default_testnet_max_per_64")]
+    pub max_nodes_per_64: usize,
+
+    /// Whether to enforce node age requirements.
+    /// Default: false (compared to true in production).
+    #[serde(default)]
+    pub enforce_age_requirements: bool,
+
+    /// Enable geographic diversity checks.
+    /// Default: false (compared to true in production).
+    #[serde(default)]
+    pub enable_geo_checks: bool,
+}
+
+impl Default for TestnetConfig {
+    fn default() -> Self {
+        Self {
+            max_nodes_per_asn: default_testnet_max_per_asn(),
+            max_nodes_per_64: default_testnet_max_per_64(),
+            enforce_age_requirements: false,
+            enable_geo_checks: false,
+        }
+    }
+}
+
+const fn default_testnet_max_per_asn() -> usize {
+    5000
+}
+
+const fn default_testnet_max_per_64() -> usize {
+    100
+}
+
 /// Node configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeConfig {
@@ -46,6 +104,15 @@ pub struct NodeConfig {
     /// Bootstrap peer addresses.
     #[serde(default)]
     pub bootstrap: Vec<SocketAddr>,
+
+    /// Network mode (production, testnet, or development).
+    #[serde(default)]
+    pub network_mode: NetworkMode,
+
+    /// Testnet-specific configuration.
+    /// Only used when `network_mode` is `Testnet`.
+    #[serde(default)]
+    pub testnet: TestnetConfig,
 
     /// Upgrade configuration.
     #[serde(default)]
@@ -167,11 +234,75 @@ impl Default for NodeConfig {
             port: 0,
             ip_version: IpVersion::default(),
             bootstrap: Vec::new(),
+            network_mode: NetworkMode::default(),
+            testnet: TestnetConfig::default(),
             upgrade: UpgradeConfig::default(),
             migration: MigrationConfig::default(),
             payment: PaymentConfig::default(),
             log_level: default_log_level(),
         }
+    }
+}
+
+impl NodeConfig {
+    /// Create a testnet configuration preset.
+    ///
+    /// This is a convenience method for setting up a testnet node with
+    /// relaxed anti-Sybil protection, suitable for single-provider deployments.
+    /// Includes default bootstrap nodes for the Saorsa testnet.
+    #[must_use]
+    pub fn testnet() -> Self {
+        Self {
+            network_mode: NetworkMode::Testnet,
+            testnet: TestnetConfig::default(),
+            bootstrap: default_testnet_bootstrap(),
+            ..Self::default()
+        }
+    }
+
+    /// Create a development configuration preset.
+    ///
+    /// This has minimal restrictions and is only suitable for local testing.
+    #[must_use]
+    pub fn development() -> Self {
+        Self {
+            network_mode: NetworkMode::Development,
+            testnet: TestnetConfig {
+                max_nodes_per_asn: usize::MAX,
+                max_nodes_per_64: usize::MAX,
+                enforce_age_requirements: false,
+                enable_geo_checks: false,
+            },
+            ..Self::default()
+        }
+    }
+
+    /// Check if this configuration is using relaxed security settings.
+    #[must_use]
+    pub fn is_relaxed(&self) -> bool {
+        !matches!(self.network_mode, NetworkMode::Production)
+    }
+
+    /// Load configuration from a TOML file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be read or parsed.
+    pub fn from_file(path: &std::path::Path) -> crate::Result<Self> {
+        let content = std::fs::read_to_string(path)?;
+        toml::from_str(&content).map_err(|e| crate::Error::Config(e.to_string()))
+    }
+
+    /// Save configuration to a TOML file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be written.
+    pub fn to_file(&self, path: &std::path::Path) -> crate::Result<()> {
+        let content =
+            toml::to_string_pretty(self).map_err(|e| crate::Error::Config(e.to_string()))?;
+        std::fs::write(path, content)?;
+        Ok(())
     }
 }
 
@@ -210,26 +341,18 @@ const fn default_staged_rollout_hours() -> u64 {
     24 // 24 hour window for staged rollout
 }
 
-impl NodeConfig {
-    /// Load configuration from a TOML file.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the file cannot be read or parsed.
-    pub fn from_file(path: &std::path::Path) -> crate::Result<Self> {
-        let content = std::fs::read_to_string(path)?;
-        toml::from_str(&content).map_err(|e| crate::Error::Config(e.to_string()))
-    }
+/// Default testnet bootstrap nodes.
+///
+/// These are well-known bootstrap nodes for the Saorsa testnet.
+/// - saorsa-bootstrap-1 (NYC): 165.22.4.178:12000
+/// - saorsa-bootstrap-2 (SFO): 164.92.111.156:12000
+fn default_testnet_bootstrap() -> Vec<SocketAddr> {
+    use std::net::{Ipv4Addr, SocketAddrV4};
 
-    /// Save configuration to a TOML file.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the file cannot be written.
-    pub fn to_file(&self, path: &std::path::Path) -> crate::Result<()> {
-        let content =
-            toml::to_string_pretty(self).map_err(|e| crate::Error::Config(e.to_string()))?;
-        std::fs::write(path, content)?;
-        Ok(())
-    }
+    vec![
+        // saorsa-bootstrap-1 (Digital Ocean NYC1)
+        SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(165, 22, 4, 178), 12000)),
+        // saorsa-bootstrap-2 (Digital Ocean SFO3)
+        SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(164, 92, 111, 156), 12000)),
+    ]
 }
