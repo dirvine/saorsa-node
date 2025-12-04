@@ -166,7 +166,7 @@ impl UpgradeMonitor {
     /// Check GitHub for available updates.
     ///
     /// This method only checks for available updates, it does not respect
-    /// staged rollout delays. Use [`check_for_ready_upgrade`] for staged rollout
+    /// staged rollout delays. Use [`Self::check_for_ready_upgrade`] for staged rollout
     /// aware upgrade checking.
     ///
     /// # Errors

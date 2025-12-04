@@ -5,10 +5,13 @@
 //! - Binary signing with ML-DSA-65
 //! - Signature verification
 //!
-//! Usage:
-//!   saorsa-keygen generate [output-dir]    Generate a new keypair
-//!   saorsa-keygen sign --key <key> --input <file> --output <sig>
-//!   saorsa-keygen verify --key <key> --input <file> --signature <sig>
+//! # Usage
+//!
+//! ```text
+//! saorsa-keygen generate [output-dir]    Generate a new keypair
+//! saorsa-keygen sign --key <key> --input <file> --output <sig>
+//! saorsa-keygen verify --key <key> --input <file> --signature <sig>
+//! ```
 
 // This is a standalone CLI tool that exits on any error, so expect/unwrap is acceptable
 #![allow(clippy::unwrap_used, clippy::expect_used)]
