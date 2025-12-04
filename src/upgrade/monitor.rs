@@ -420,7 +420,7 @@ fn build_platform_patterns(arch: &str, os: &str) -> Vec<String> {
 
     // Map arch to common naming conventions
     let arch_patterns: Vec<&str> = match arch {
-        "x86_64" => vec!["x86_64", "amd64"],
+        "x86_64" => vec!["x86_64", "amd64", "x64"],
         "aarch64" => vec!["aarch64", "arm64"],
         "x86" => vec!["i686", "i386", "x86"],
         _ => vec![arch],
@@ -782,6 +782,7 @@ mod tests {
     fn test_build_platform_patterns() {
         let patterns = build_platform_patterns("x86_64", "linux");
         assert!(patterns.iter().any(|p| p.contains("x86_64")));
+        assert!(patterns.iter().any(|p| p.contains("x64")));
         assert!(patterns.iter().any(|p| p.contains("linux")));
 
         let patterns_arm = build_platform_patterns("aarch64", "macos");
