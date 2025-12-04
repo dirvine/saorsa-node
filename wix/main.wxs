@@ -1,10 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
+<?define Version = "$(var.ProductVersion)" ?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
     <Product
         Id="*"
         Name="Saorsa Node"
         Language="1033"
-        Version="!(bind.FileVersion.SaorsaNodeExe)"
+        Version="$(var.ProductVersion)"
         Manufacturer="Saorsa Labs"
         UpgradeCode="E8A7B5F2-3C9D-4E1A-B2F8-7D6C5A4E3B2D">
 

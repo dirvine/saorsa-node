@@ -152,6 +152,22 @@ jobs:
           choco install wixtoolset -y
           echo "C:\Program Files (x86)\WiX Toolset v3.14\bin" >> $env:GITHUB_PATH
 
+      - name: Extract version from tag
+        id: version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          # Remove 'v' prefix and convert to MSI format (x.y.z.0)
+          $version = $tag -replace '^v', ''
+          # Ensure 4-part version for MSI (add .0 if needed)
+          $parts = $version.Split('.')
+          while ($parts.Length -lt 4) {
+            $version = "$version.0"
+            $parts = $version.Split('.')
+          }
+          echo "version=$version" >> $env:GITHUB_OUTPUT
+          echo "MSI Version: $version"
+
       - name: Build MSI installer
         shell: pwsh
         run: |
@@ -182,7 +198,15 @@ jobs:
             $stream.Close()
           }
 
-          candle.exe wix\main.wxs -o wix\main.wixobj -ext WixUIExtension
+          # Create license.rtf if it doesn't exist
+          if (-not (Test-Path "wix\license.rtf")) {
+            $licenseText = Get-Content "LICENSE-MIT" -Raw
+            $rtfContent = "{\rtf1\ansi\deff0{\fonttbl{\f0 Consolas;}}\f0\fs20 " + ($licenseText -replace '\n', '\par ') + "}"
+            Set-Content -Path "wix\license.rtf" -Value $rtfContent
+          }
+
+          $version = "${{ steps.version.outputs.version }}"
+          candle.exe wix\main.wxs -o wix\main.wixobj -ext WixUIExtension -dProductVersion="$version"
           light.exe wix\main.wixobj -o saorsa-node.msi -ext WixUIExtension
 
       - name: Upload MSI
