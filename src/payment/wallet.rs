@@ -28,13 +28,8 @@ impl WalletConfig {
     /// # Errors
     ///
     /// Returns an error if the address string is invalid.
-    pub fn new(
-        rewards_address: Option<&str>,
-        evm_network: EvmNetworkConfig,
-    ) -> Result<Self> {
-        let rewards_address = rewards_address
-            .map(parse_rewards_address)
-            .transpose()?;
+    pub fn new(rewards_address: Option<&str>, evm_network: EvmNetworkConfig) -> Result<Self> {
+        let rewards_address = rewards_address.map(parse_rewards_address).transpose()?;
 
         let network = match evm_network {
             EvmNetworkConfig::ArbitrumOne => EvmNetwork::ArbitrumOne,
@@ -99,9 +94,8 @@ pub fn parse_rewards_address(address: &str) -> Result<RewardsAddress> {
     }
 
     // Parse into bytes
-    let bytes = hex::decode(hex_part).map_err(|e| {
-        Error::Payment(format!("Failed to decode rewards address: {e}"))
-    })?;
+    let bytes = hex::decode(hex_part)
+        .map_err(|e| Error::Payment(format!("Failed to decode rewards address: {e}")))?;
 
     // Convert to fixed-size array
     let mut address_bytes = [0u8; 20];
@@ -166,7 +160,9 @@ mod tests {
 
     #[test]
     fn test_is_valid_address() {
-        assert!(is_valid_address("0x742d35Cc6634C0532925a3b844Bc9e7595916Da2"));
+        assert!(is_valid_address(
+            "0x742d35Cc6634C0532925a3b844Bc9e7595916Da2"
+        ));
         assert!(!is_valid_address("invalid"));
     }
 

@@ -67,7 +67,12 @@ pub struct Cli {
     pub rewards_address: Option<String>,
 
     /// EVM network for payment processing.
-    #[arg(long, value_enum, default_value = "arbitrum-one", env = "SAORSA_EVM_NETWORK")]
+    #[arg(
+        long,
+        value_enum,
+        default_value = "arbitrum-one",
+        env = "SAORSA_EVM_NETWORK"
+    )]
     pub evm_network: CliEvmNetwork,
 
     /// Metrics port for Prometheus scraping (0 to disable).

@@ -226,7 +226,9 @@ mod tests {
         let generator = create_test_generator();
         let content = [42u8; 32];
 
-        let quote = generator.create_quote(content, 1024, 0).expect("valid quote");
+        let quote = generator
+            .create_quote(content, 1024, 0)
+            .expect("valid quote");
         assert!(verify_quote_content(&quote, &content));
 
         // Wrong content should fail
