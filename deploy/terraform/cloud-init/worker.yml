@@ -28,12 +28,31 @@ write_files:
 
       source /etc/saorsa/config.env
 
-      BINARY_URL="https://github.com/dirvine/saorsa-node/releases/download/v$${SAORSA_VERSION}/saorsa-node-linux-amd64"
-      BINARY_PATH="/usr/local/bin/saorsa-node"
+      ARCH=$(uname -m)
+      case "$${ARCH}" in
+        x86_64) PLATFORM="linux-x64" ;;
+        aarch64) PLATFORM="linux-arm64" ;;
+        *) echo "Unsupported architecture: $${ARCH}"; exit 1 ;;
+      esac
 
-      echo "Downloading saorsa-node v$${SAORSA_VERSION}..."
-      curl -L -o "$${BINARY_PATH}" "$${BINARY_URL}"
-      chmod +x "$${BINARY_PATH}"
+      ARCHIVE_URL="https://github.com/dirvine/saorsa-node/releases/download/v$${SAORSA_VERSION}/saorsa-node-cli-$${PLATFORM}.tar.gz"
+      SIG_URL="$${ARCHIVE_URL}.sig"
+      BINARY_PATH="/usr/local/bin/saorsa-node"
+      KEYGEN_PATH="/usr/local/bin/saorsa-keygen"
+
+      echo "Downloading saorsa-node v$${SAORSA_VERSION} for $${PLATFORM}..."
+      cd /tmp
+      curl -L -o saorsa-node.tar.gz "$${ARCHIVE_URL}"
+      curl -L -o saorsa-node.tar.gz.sig "$${SIG_URL}" || echo "No signature file (dev release)"
+
+      # Extract binaries
+      tar -xzf saorsa-node.tar.gz
+      mv saorsa-node "$${BINARY_PATH}"
+      mv saorsa-keygen "$${KEYGEN_PATH}" || true
+      chmod +x "$${BINARY_PATH}" "$${KEYGEN_PATH}" 2>/dev/null || true
+      rm -f saorsa-node.tar.gz saorsa-node.tar.gz.sig
+
+      echo "Installed saorsa-node v$${SAORSA_VERSION}"
 
       # Parse bootstrap nodes
       IFS=',' read -ra BOOTSTRAPS <<< "$${BOOTSTRAP_NODES}"

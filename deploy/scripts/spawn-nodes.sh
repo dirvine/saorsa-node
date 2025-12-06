@@ -1,6 +1,7 @@
 #!/bin/bash
 # Saorsa Node Spawner - Deploy multiple nodes on a single host
 # Usage: ./spawn-nodes.sh [count] [bootstrap1] [bootstrap2] ...
+# Env: SAORSA_VERSION=0.1.0 to download a specific version from GitHub
 set -euo pipefail
 
 # Configuration
@@ -13,10 +14,38 @@ BASE_DIR="/var/lib/saorsa/nodes"
 LOG_DIR="/var/log/saorsa"
 BINARY_PATH="${SAORSA_BINARY:-/usr/local/bin/saorsa-node}"
 METRICS_BASE_PORT="${METRICS_BASE_PORT:-9100}"
+SAORSA_VERSION="${SAORSA_VERSION:-}"
 
 # Resource limits per node
 MEMORY_LIMIT="350M"
 CPU_QUOTA="15%"
+
+# Download binary from GitHub releases if version specified
+download_binary() {
+    local version="$1"
+    local arch
+    arch=$(uname -m)
+
+    case "$arch" in
+        x86_64) PLATFORM="linux-x64" ;;
+        aarch64) PLATFORM="linux-arm64" ;;
+        *) echo "Unsupported architecture: $arch"; exit 1 ;;
+    esac
+
+    local url="https://github.com/dirvine/saorsa-node/releases/download/v${version}/saorsa-node-cli-${PLATFORM}.tar.gz"
+
+    echo "Downloading saorsa-node v${version} for ${PLATFORM}..."
+    curl -L -o /tmp/saorsa-node.tar.gz "$url"
+
+    echo "Extracting..."
+    tar -xzf /tmp/saorsa-node.tar.gz -C /tmp
+    mv /tmp/saorsa-node "$BINARY_PATH"
+    mv /tmp/saorsa-keygen /usr/local/bin/saorsa-keygen 2>/dev/null || true
+    chmod +x "$BINARY_PATH"
+    rm -f /tmp/saorsa-node.tar.gz
+
+    echo "Installed saorsa-node v${version} to $BINARY_PATH"
+}
 
 echo "=== Saorsa Multi-Node Spawner ==="
 echo "Nodes to spawn: $NODE_COUNT"
@@ -25,10 +54,15 @@ echo "Binary: $BINARY_PATH"
 echo "Base directory: $BASE_DIR"
 echo ""
 
+# Download if version specified and binary missing
+if [[ -n "$SAORSA_VERSION" ]] && [[ ! -x "$BINARY_PATH" ]]; then
+    download_binary "$SAORSA_VERSION"
+fi
+
 # Check binary exists
 if [[ ! -x "$BINARY_PATH" ]]; then
     echo "ERROR: saorsa-node binary not found at $BINARY_PATH"
-    echo "Set SAORSA_BINARY environment variable or install to /usr/local/bin/"
+    echo "Set SAORSA_VERSION to download, or SAORSA_BINARY to use an existing binary"
     exit 1
 fi
 
