@@ -995,7 +995,12 @@ This project is dual-licensed under MIT and Apache-2.0.
 
 ## Contributing
 
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+Contributions are welcome! Please follow these guidelines:
+
+1. Fork the repository
+2. Create a feature branch
+3. Run tests and clippy before submitting
+4. Submit a pull request
 
 ### Development
 
