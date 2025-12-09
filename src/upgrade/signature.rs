@@ -2,6 +2,20 @@
 //!
 //! Provides quantum-resistant signature verification for auto-upgrade binaries
 //! using FIPS 204 ML-DSA-65.
+//!
+//! ## Memory Constraint
+//!
+//! ML-DSA-65 signature verification requires the complete message in memory.
+//! Unlike hash-based streaming verification (e.g., SHA-256), the ML-DSA algorithm
+//! must process the entire binary at once. This means:
+//!
+//! - **Memory usage**: The entire binary is loaded into RAM for verification
+//! - **Typical binaries**: 50-100MB for release builds, which is acceptable
+//!   for modern systems (minimum 512MB RAM recommended)
+//! - **No streaming**: Cannot verify signatures on files larger than available RAM
+//!
+//! This is an inherent property of FIPS 204 ML-DSA lattice-based signatures and
+//! is accepted as a reasonable trade-off for post-quantum security.
 
 use crate::error::{Error, Result};
 use saorsa_pqc::api::sig::{ml_dsa_65, MlDsaPublicKey, MlDsaSignature, MlDsaVariant};

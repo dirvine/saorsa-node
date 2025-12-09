@@ -28,6 +28,21 @@ impl Default for EvmVerifierConfig {
 }
 
 /// Configuration for the payment verifier.
+///
+/// ## Security: Fail-Closed Default
+///
+/// The `require_payment_on_error` field defaults to `true` (fail-closed behavior).
+/// This means that if the autonomi network lookup fails (network issues, timeouts, etc.),
+/// the node will require payment rather than allowing free storage.
+///
+/// This is the secure default because:
+/// - **Prevents abuse**: Attackers cannot exploit network failures to store data for free
+/// - **Economic security**: Ensures payment is always required for new data
+/// - **Fail-safe**: Errs on the side of requiring payment when uncertain
+///
+/// Setting `require_payment_on_error = false` enables fail-open behavior, which is
+/// less secure but may be useful during network instability for better user experience.
+/// **Use fail-open only in controlled environments.**
 #[derive(Debug, Clone)]
 pub struct PaymentVerifierConfig {
     /// Autonomi verifier configuration.
@@ -37,6 +52,10 @@ pub struct PaymentVerifierConfig {
     /// Cache capacity (number of `XorName` values to cache).
     pub cache_capacity: usize,
     /// Whether to require payment on autonomi lookup failure.
+    ///
+    /// **Default: `true` (fail-closed)** - This is the secure default.
+    /// When `true`: Network errors result in `PaymentRequired` status.
+    /// When `false`: Network errors result in `AlreadyPaid` status (less secure).
     pub require_payment_on_error: bool,
 }
 

@@ -118,21 +118,28 @@ pub struct HybridClient {
 
 impl HybridClient {
     /// Create a new hybrid client with the given configuration.
-    #[must_use]
-    pub fn new(config: HybridConfig) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the legacy autonomi client fails to initialize.
+    pub async fn new(config: HybridConfig) -> crate::error::Result<Self> {
         info!("Creating hybrid client (saorsa + autonomi)");
-        Self {
+        let legacy = LegacyClient::new(config.legacy.clone()).await?;
+        Ok(Self {
             quantum: QuantumClient::new(config.quantum.clone()),
-            legacy: LegacyClient::new(config.legacy.clone()),
+            legacy,
             config,
             stats: RwLock::new(HybridStats::default()),
-        }
+        })
     }
 
     /// Create a hybrid client with default configuration.
-    #[must_use]
-    pub fn with_defaults() -> Self {
-        Self::new(HybridConfig::default())
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if initialization fails.
+    pub async fn with_defaults() -> crate::error::Result<Self> {
+        Self::new(HybridConfig::default()).await
     }
 
     /// Set the P2P node for saorsa network operations.
@@ -568,9 +575,9 @@ mod tests {
         assert_eq!(config.legacy.timeout_secs, 30);
     }
 
-    #[test]
-    fn test_hybrid_client_creation() {
-        let client = HybridClient::with_defaults();
+    #[tokio::test]
+    async fn test_hybrid_client_creation() {
+        let client = HybridClient::with_defaults().await.expect("should create");
         assert!(client.config.auto_migrate);
 
         let stats = client.stats();
@@ -578,9 +585,9 @@ mod tests {
         assert_eq!(stats.autonomi_hits, 0);
     }
 
-    #[test]
-    fn test_stats_reset() {
-        let client = HybridClient::with_defaults();
+    #[tokio::test]
+    async fn test_stats_reset() {
+        let client = HybridClient::with_defaults().await.expect("should create");
         {
             let mut stats = client.stats.write();
             stats.saorsa_hits = 10;
@@ -595,7 +602,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_chunk_returns_none_when_not_found() {
-        let client = HybridClient::with_defaults();
+        let client = HybridClient::with_defaults().await.expect("should create");
         let address = [0; 32];
 
         // Without a P2P node, quantum client fails, then legacy returns None
@@ -608,7 +615,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_lookup_returns_not_found() {
-        let client = HybridClient::with_defaults();
+        let client = HybridClient::with_defaults().await.expect("should create");
         let address = [0; 32];
 
         let result = client.lookup(&address).await.unwrap();
@@ -617,7 +624,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_exists_returns_none_when_not_found() {
-        let client = HybridClient::with_defaults();
+        let client = HybridClient::with_defaults().await.expect("should create");
         let address = [0; 32];
 
         let result = client.exists(&address).await.unwrap();

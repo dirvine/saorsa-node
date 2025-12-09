@@ -2,6 +2,16 @@
 //!
 //! This module handles discovering and migrating data from existing ant-node
 //! installations to the saorsa-network.
+//!
+//! ## Migration Flow
+//!
+//! 1. Scan ant-node data directory for records
+//! 2. Read self-encrypted chunks (already quantum-safe - symmetric encryption)
+//! 3. Store on saorsa network via `P2PNode` (handles ML-DSA-65 signing)
+//!
+//! Note: No re-encryption needed since chunks use self-encryption (content-addressed
+//! symmetric crypto) which is already quantum-resistant. The `P2PNode` handles
+//! ML-DSA-65 signatures for stored data.
 
 mod decrypt;
 mod scanner;
@@ -10,7 +20,9 @@ pub use decrypt::{decrypt_record, decrypt_with_embedded_nonce, derive_key, deriv
 
 use crate::error::{Error, Result};
 use crate::event::{NodeEvent, NodeEventsSender};
+use saorsa_core::P2PNode;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tracing::{debug, info, warn};
 
 /// Statistics from a migration operation.
@@ -64,6 +76,8 @@ pub struct AntDataMigrator {
     ant_data_dir: PathBuf,
     /// Master key for record decryption (if available).
     master_key: Option<Vec<u8>>,
+    /// P2P node for network storage operations.
+    p2p_node: Option<Arc<P2PNode>>,
 }
 
 impl AntDataMigrator {
@@ -94,6 +108,7 @@ impl AntDataMigrator {
         Ok(Self {
             ant_data_dir,
             master_key: None,
+            p2p_node: None,
         })
     }
 
@@ -112,6 +127,22 @@ impl AntDataMigrator {
         migrator.master_key = Some(master_key);
         info!("Migrator configured with decryption key");
         Ok(migrator)
+    }
+
+    /// Set the P2P node for network storage operations.
+    ///
+    /// When a P2P node is configured, migrated records will be stored on the
+    /// saorsa network. Without a P2P node, migration only validates and
+    /// processes records locally.
+    ///
+    /// # Arguments
+    ///
+    /// * `node` - The P2P node to use for network operations
+    #[must_use]
+    pub fn with_node(mut self, node: Arc<P2PNode>) -> Self {
+        self.p2p_node = Some(node);
+        info!("Migrator configured with P2P node for network storage");
+        self
     }
 
     /// Auto-detect ant-node data directories.
@@ -247,7 +278,6 @@ impl AntDataMigrator {
     }
 
     /// Process a single record file.
-    #[allow(clippy::unused_async)] // Will need async for network operations
     async fn process_record(&self, path: &std::path::Path) -> Result<ProcessResult> {
         debug!("Processing record: {}", path.display());
 
@@ -310,20 +340,65 @@ impl AntDataMigrator {
         };
 
         // Create a record for storage
-        let _record = AntRecord {
+        let record = AntRecord {
             path: path.to_path_buf(),
             record_type,
             content: decrypted_content,
         };
 
-        // Network operations placeholder:
-        // In a full implementation, this would:
-        // 1. Check if record exists on saorsa-network via P2PNode::lookup()
-        // 2. If not found, store via P2PNode::store()
-        // 3. Re-encrypt with quantum-safe cryptography if needed
-        //
-        // For now, mark as migrated since we've successfully processed the record
-        debug!("Record processed, ready for network upload");
+        // Store on saorsa network if P2P node is configured
+        if let Some(ref node) = self.p2p_node {
+            // Compute content address using SHA-256 (XorName)
+            use sha2::{Digest, Sha256};
+            let mut hasher = Sha256::new();
+            hasher.update(&record.content);
+            let hash = hasher.finalize();
+            let mut key = [0u8; 32];
+            key.copy_from_slice(&hash);
+
+            // Check if data already exists on the network
+            match node.dht_get(key).await {
+                Ok(Some(_)) => {
+                    debug!(
+                        "Record {} already exists on saorsa network, skipping",
+                        hex::encode(key)
+                    );
+                    return Ok(ProcessResult::Skipped);
+                }
+                Ok(None) => {
+                    // Data doesn't exist, proceed with storage
+                }
+                Err(e) => {
+                    // Network lookup failed, log warning but try to store anyway
+                    warn!("Network lookup failed for {}: {}", hex::encode(key), e);
+                }
+            }
+
+            // Store the record on the saorsa network
+            // The P2PNode handles ML-DSA-65 signing internally
+            match node.dht_put(key, record.content.clone()).await {
+                Ok(()) => {
+                    debug!(
+                        "Successfully stored record {} ({} bytes) on saorsa network",
+                        hex::encode(key),
+                        record.content.len()
+                    );
+                }
+                Err(e) => {
+                    return Err(Error::Migration(format!(
+                        "Failed to store record {} on network: {}",
+                        hex::encode(key),
+                        e
+                    )));
+                }
+            }
+        } else {
+            // No P2P node configured - log that we processed locally only
+            debug!(
+                "Record processed locally (no P2P node configured): {}",
+                path.display()
+            );
+        }
 
         Ok(ProcessResult::Migrated)
     }

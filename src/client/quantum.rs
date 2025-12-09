@@ -51,8 +51,6 @@ pub struct QuantumClient {
     p2p_node: Option<Arc<P2PNode>>,
 }
 
-// TODO: Remove this allow once the async methods are fully implemented
-#[allow(clippy::unused_async)]
 impl QuantumClient {
     /// Create a new quantum client with the given configuration.
     #[must_use]
@@ -96,26 +94,42 @@ impl QuantumClient {
             hex::encode(address)
         );
 
-        let Some(ref _node) = self.p2p_node else {
+        let Some(ref node) = self.p2p_node else {
             return Err(Error::Network("P2P node not configured".into()));
         };
 
-        // In a full implementation, this would:
-        // 1. Use the P2PNode's DHT to lookup the chunk
-        // 2. Retrieve from closest nodes
-        // 3. Decrypt if encrypted
-        // 4. Verify integrity
+        let _ = self.config.timeout_secs; // Use config for future timeout implementation
 
-        let _ = self.config.timeout_secs; // Use config to avoid warning
-
-        // Placeholder implementation
-        debug!("Chunk not found on saorsa network (placeholder)");
-        Ok(None)
+        // Lookup chunk in DHT
+        match node.dht_get(*address).await {
+            Ok(Some(data)) => {
+                debug!(
+                    "Found chunk {} on saorsa network ({} bytes)",
+                    hex::encode(address),
+                    data.len()
+                );
+                Ok(Some(DataChunk {
+                    address: *address,
+                    content: Bytes::from(data),
+                    source: DataSource::Saorsa,
+                }))
+            }
+            Ok(None) => {
+                debug!("Chunk {} not found on saorsa network", hex::encode(address));
+                Ok(None)
+            }
+            Err(e) => Err(Error::Network(format!(
+                "DHT lookup failed for {}: {}",
+                hex::encode(address),
+                e
+            ))),
+        }
     }
 
     /// Store a chunk on the saorsa network.
     ///
-    /// The chunk will be encrypted with ML-KEM-768 and signed with ML-DSA-65.
+    /// The chunk will be stored with content-addressing (SHA-256 hash as key).
+    /// The `P2PNode` handles ML-DSA-65 signing internally.
     ///
     /// # Arguments
     ///
@@ -133,18 +147,11 @@ impl QuantumClient {
 
         debug!("Storing chunk on saorsa network ({} bytes)", content.len());
 
-        let Some(ref _node) = self.p2p_node else {
+        let Some(ref node) = self.p2p_node else {
             return Err(Error::Network("P2P node not configured".into()));
         };
 
-        // In a full implementation, this would:
-        // 1. Compute content address (SHA256 hash -> XorName)
-        // 2. Encrypt content with ML-KEM-768 derived key
-        // 3. Sign the encrypted content with ML-DSA-65
-        // 4. Store on closest nodes in the DHT
-        // 5. Verify storage on replica_count nodes
-
-        // Compute content address (placeholder using SHA256)
+        // Compute content address using SHA-256
         let mut hasher = Sha256::new();
         hasher.update(&content);
         let hash = hasher.finalize();
@@ -152,11 +159,21 @@ impl QuantumClient {
         let mut address = [0u8; 32];
         address.copy_from_slice(&hash);
 
-        let _ = self.config.replica_count; // Use config
+        let _ = self.config.replica_count; // Used for future replication verification
+
+        // Store in DHT - P2PNode handles ML-DSA-65 signing internally
+        node.dht_put(address, content.to_vec()).await.map_err(|e| {
+            Error::Network(format!(
+                "DHT store failed for {}: {}",
+                hex::encode(address),
+                e
+            ))
+        })?;
 
         info!(
-            "Chunk stored at address: {} (placeholder)",
-            hex::encode(address)
+            "Chunk stored at address: {} ({} bytes)",
+            hex::encode(address),
+            content.len()
         );
         Ok(address)
     }
@@ -184,33 +201,54 @@ impl QuantumClient {
         payload: Vec<u8>,
         counter: u64,
     ) -> Result<ScratchpadEntry> {
+        use sha2::{Digest, Sha256};
+
         debug!(
             "Storing scratchpad on saorsa network for owner: {}",
             hex::encode(owner)
         );
 
-        let Some(ref _node) = self.p2p_node else {
+        let Some(ref node) = self.p2p_node else {
             return Err(Error::Network("P2P node not configured".into()));
         };
 
-        // In a full implementation:
-        // 1. Sign the scratchpad with ML-DSA-65
-        // 2. Encrypt payload with owner's ML-KEM-768 key
-        // 3. Store on the DHT at owner-derived address
-
-        // Placeholder signature
+        // Create the entry (signature is placeholder - ML-DSA-65 signing handled by P2PNode)
         let signature = vec![0u8; 64];
-
         let entry = ScratchpadEntry {
             owner,
             content_type,
-            payload,
+            payload: payload.clone(),
             counter,
             signature,
             source: DataSource::Saorsa,
         };
 
-        info!("Scratchpad stored for owner: {}", hex::encode(owner));
+        // Serialize entry for storage
+        let serialized = rmp_serde::to_vec(&entry)
+            .map_err(|e| Error::Serialization(format!("Failed to serialize scratchpad: {e}")))?;
+
+        // Derive address from owner key (scratchpad address = hash of owner)
+        let mut hasher = Sha256::new();
+        hasher.update(b"scratchpad:");
+        hasher.update(owner);
+        let hash = hasher.finalize();
+        let mut address = [0u8; 32];
+        address.copy_from_slice(&hash);
+
+        // Store in DHT
+        node.dht_put(address, serialized).await.map_err(|e| {
+            Error::Network(format!(
+                "DHT store failed for scratchpad {}: {}",
+                hex::encode(owner),
+                e
+            ))
+        })?;
+
+        info!(
+            "Scratchpad stored for owner: {} at address: {}",
+            hex::encode(owner),
+            hex::encode(address)
+        );
         Ok(entry)
     }
 
@@ -228,18 +266,49 @@ impl QuantumClient {
     ///
     /// Returns an error if the network operation fails.
     pub async fn get_scratchpad(&self, owner: &[u8; 32]) -> Result<Option<ScratchpadEntry>> {
+        use sha2::{Digest, Sha256};
+
         debug!(
             "Querying saorsa network for scratchpad: {}",
             hex::encode(owner)
         );
 
-        let Some(ref _node) = self.p2p_node else {
+        let Some(ref node) = self.p2p_node else {
             return Err(Error::Network("P2P node not configured".into()));
         };
 
-        // Placeholder implementation
-        debug!("Scratchpad not found on saorsa network (placeholder)");
-        Ok(None)
+        // Derive address from owner key (same derivation as put_scratchpad)
+        let mut hasher = Sha256::new();
+        hasher.update(b"scratchpad:");
+        hasher.update(owner);
+        let hash = hasher.finalize();
+        let mut address = [0u8; 32];
+        address.copy_from_slice(&hash);
+
+        // Lookup in DHT
+        match node.dht_get(address).await {
+            Ok(Some(data)) => {
+                // Deserialize the scratchpad entry
+                let entry: ScratchpadEntry = rmp_serde::from_slice(&data).map_err(|e| {
+                    Error::Serialization(format!("Failed to deserialize scratchpad: {e}"))
+                })?;
+                debug!(
+                    "Found scratchpad for owner {} (counter: {})",
+                    hex::encode(owner),
+                    entry.counter
+                );
+                Ok(Some(entry))
+            }
+            Ok(None) => {
+                debug!("Scratchpad not found for owner {}", hex::encode(owner));
+                Ok(None)
+            }
+            Err(e) => Err(Error::Network(format!(
+                "DHT lookup failed for scratchpad {}: {}",
+                hex::encode(owner),
+                e
+            ))),
+        }
     }
 
     /// Store a pointer on the saorsa network.
@@ -263,19 +332,20 @@ impl QuantumClient {
         target: XorName,
         counter: u64,
     ) -> Result<PointerRecord> {
+        use sha2::{Digest, Sha256};
+
         debug!(
             "Storing pointer on saorsa network: {} -> {}",
             hex::encode(owner),
             hex::encode(target)
         );
 
-        let Some(ref _node) = self.p2p_node else {
+        let Some(ref node) = self.p2p_node else {
             return Err(Error::Network("P2P node not configured".into()));
         };
 
-        // Placeholder signature
+        // Create pointer record (signature is placeholder - ML-DSA-65 signing handled by P2PNode)
         let signature = vec![0u8; 64];
-
         let record = PointerRecord {
             owner,
             counter,
@@ -284,7 +354,32 @@ impl QuantumClient {
             source: DataSource::Saorsa,
         };
 
-        info!("Pointer stored for owner: {}", hex::encode(owner));
+        // Serialize record
+        let serialized = rmp_serde::to_vec(&record)
+            .map_err(|e| Error::Serialization(format!("Failed to serialize pointer: {e}")))?;
+
+        // Derive address from owner key
+        let mut hasher = Sha256::new();
+        hasher.update(b"pointer:");
+        hasher.update(owner);
+        let hash = hasher.finalize();
+        let mut address = [0u8; 32];
+        address.copy_from_slice(&hash);
+
+        // Store in DHT
+        node.dht_put(address, serialized).await.map_err(|e| {
+            Error::Network(format!(
+                "DHT store failed for pointer {}: {}",
+                hex::encode(owner),
+                e
+            ))
+        })?;
+
+        info!(
+            "Pointer stored for owner: {} at address: {}",
+            hex::encode(owner),
+            hex::encode(address)
+        );
         Ok(record)
     }
 
@@ -302,17 +397,48 @@ impl QuantumClient {
     ///
     /// Returns an error if the network operation fails.
     pub async fn get_pointer(&self, owner: &[u8; 32]) -> Result<Option<PointerRecord>> {
+        use sha2::{Digest, Sha256};
+
         debug!(
             "Querying saorsa network for pointer: {}",
             hex::encode(owner)
         );
 
-        let Some(ref _node) = self.p2p_node else {
+        let Some(ref node) = self.p2p_node else {
             return Err(Error::Network("P2P node not configured".into()));
         };
 
-        debug!("Pointer not found on saorsa network (placeholder)");
-        Ok(None)
+        // Derive address from owner key (same as put_pointer)
+        let mut hasher = Sha256::new();
+        hasher.update(b"pointer:");
+        hasher.update(owner);
+        let hash = hasher.finalize();
+        let mut address = [0u8; 32];
+        address.copy_from_slice(&hash);
+
+        // Lookup in DHT
+        match node.dht_get(address).await {
+            Ok(Some(data)) => {
+                let record: PointerRecord = rmp_serde::from_slice(&data).map_err(|e| {
+                    Error::Serialization(format!("Failed to deserialize pointer: {e}"))
+                })?;
+                debug!(
+                    "Found pointer for owner {} -> {}",
+                    hex::encode(owner),
+                    hex::encode(record.target)
+                );
+                Ok(Some(record))
+            }
+            Ok(None) => {
+                debug!("Pointer not found for owner {}", hex::encode(owner));
+                Ok(None)
+            }
+            Err(e) => Err(Error::Network(format!(
+                "DHT lookup failed for pointer {}: {}",
+                hex::encode(owner),
+                e
+            ))),
+        }
     }
 
     /// Store a graph entry on the saorsa network.
@@ -336,24 +462,55 @@ impl QuantumClient {
         parents: Vec<XorName>,
         content: Vec<u8>,
     ) -> Result<GraphEntry> {
+        use sha2::{Digest, Sha256};
+
         debug!(
             "Storing graph entry on saorsa network for owner: {}",
             hex::encode(owner)
         );
 
-        let Some(ref _node) = self.p2p_node else {
+        let Some(ref node) = self.p2p_node else {
             return Err(Error::Network("P2P node not configured".into()));
         };
 
         let entry = GraphEntry {
             owner,
-            parents,
-            content,
+            parents: parents.clone(),
+            content: content.clone(),
             descendants: Vec::new(),
             source: DataSource::Saorsa,
         };
 
-        info!("Graph entry stored for owner: {}", hex::encode(owner));
+        // Serialize entry
+        let serialized = rmp_serde::to_vec(&entry)
+            .map_err(|e| Error::Serialization(format!("Failed to serialize graph entry: {e}")))?;
+
+        // Compute content-addressed key for graph entry
+        let mut hasher = Sha256::new();
+        hasher.update(b"graph:");
+        hasher.update(owner);
+        for parent in &parents {
+            hasher.update(parent);
+        }
+        hasher.update(&content);
+        let hash = hasher.finalize();
+        let mut address = [0u8; 32];
+        address.copy_from_slice(&hash);
+
+        // Store in DHT
+        node.dht_put(address, serialized).await.map_err(|e| {
+            Error::Network(format!(
+                "DHT store failed for graph entry {}: {}",
+                hex::encode(address),
+                e
+            ))
+        })?;
+
+        info!(
+            "Graph entry stored for owner: {} at address: {}",
+            hex::encode(owner),
+            hex::encode(address)
+        );
         Ok(entry)
     }
 
@@ -376,12 +533,34 @@ impl QuantumClient {
             hex::encode(address)
         );
 
-        let Some(ref _node) = self.p2p_node else {
+        let Some(ref node) = self.p2p_node else {
             return Err(Error::Network("P2P node not configured".into()));
         };
 
-        debug!("Graph entry not found on saorsa network (placeholder)");
-        Ok(None)
+        // Lookup in DHT
+        match node.dht_get(*address).await {
+            Ok(Some(data)) => {
+                let entry: GraphEntry = rmp_serde::from_slice(&data).map_err(|e| {
+                    Error::Serialization(format!("Failed to deserialize graph entry: {e}"))
+                })?;
+                debug!(
+                    "Found graph entry at {} (owner: {}, {} parents)",
+                    hex::encode(address),
+                    hex::encode(entry.owner),
+                    entry.parents.len()
+                );
+                Ok(Some(entry))
+            }
+            Ok(None) => {
+                debug!("Graph entry not found at {}", hex::encode(address));
+                Ok(None)
+            }
+            Err(e) => Err(Error::Network(format!(
+                "DHT lookup failed for graph entry {}: {}",
+                hex::encode(address),
+                e
+            ))),
+        }
     }
 
     /// Check if data exists on the saorsa network.
@@ -403,11 +582,26 @@ impl QuantumClient {
             hex::encode(address)
         );
 
-        let Some(ref _node) = self.p2p_node else {
+        let Some(ref node) = self.p2p_node else {
             return Err(Error::Network("P2P node not configured".into()));
         };
 
-        Ok(false) // Placeholder
+        // Check if data exists in DHT
+        match node.dht_get(*address).await {
+            Ok(Some(_)) => {
+                debug!("Data {} exists on saorsa network", hex::encode(address));
+                Ok(true)
+            }
+            Ok(None) => {
+                debug!("Data {} not found on saorsa network", hex::encode(address));
+                Ok(false)
+            }
+            Err(e) => Err(Error::Network(format!(
+                "DHT lookup failed for {}: {}",
+                hex::encode(address),
+                e
+            ))),
+        }
     }
 }
 
