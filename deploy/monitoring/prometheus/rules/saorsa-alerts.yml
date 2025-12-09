@@ -113,3 +113,86 @@ groups:
         annotations:
           summary: "Slow quote generation"
           description: "95th percentile quote generation time is {{ $value }}s (expected < 1s)"
+
+  # NEW in 0.7.5/0.7.6: Security and Trust Alerts
+  - name: saorsa-security-alerts
+    rules:
+      # IP Diversity (NEW in 0.7.5)
+      - alert: SaorsaHighIPDiversityRejections
+        expr: rate(saorsa_ip_diversity_rejections_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High IP diversity rejections"
+          description: "Node {{ $labels.instance }} is rejecting {{ $value | humanize }}/s peers due to IP diversity enforcement"
+
+      # Geographic Diversity (NEW in 0.7.5)
+      - alert: SaorsaHighGeoDiversityRejections
+        expr: rate(saorsa_geographic_diversity_rejections_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High geographic diversity rejections"
+          description: "Node {{ $labels.instance }} is rejecting {{ $value | humanize }}/s peers due to geographic diversity enforcement"
+
+      # Data Attestation Failures (NEW in 0.7.6)
+      - alert: SaorsaAttestationFailureRate
+        expr: (rate(saorsa_attestation_challenges_failed_total[5m]) / rate(saorsa_attestation_challenges_sent_total[5m])) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High attestation failure rate"
+          description: "Node {{ $labels.instance }} has {{ $value | humanizePercentage }} attestation challenge failure rate"
+
+      # Trust Threshold Violations (NEW in 0.7.6)
+      - alert: SaorsaTrustViolationsHigh
+        expr: rate(saorsa_trust_threshold_violations_total[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Elevated trust violations"
+          description: "Node {{ $labels.instance }} is seeing {{ $value | humanize }}/s trust threshold violations"
+
+      # Low Trust Nodes (NEW in 0.7.6)
+      - alert: SaorsaHighLowTrustNodes
+        expr: saorsa_low_trust_nodes_current > 10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Many low trust nodes detected"
+          description: "Node {{ $labels.instance }} is tracking {{ $value }} low trust nodes in its routing table"
+
+      # Enforcement Mode Strict (NEW in 0.7.6)
+      - alert: SaorsaStrictEnforcementActivated
+        expr: saorsa_enforcement_mode_strict == 1
+        for: 1m
+        labels:
+          severity: info
+        annotations:
+          summary: "Strict enforcement mode activated"
+          description: "Node {{ $labels.instance }} has activated strict trust enforcement mode"
+
+      # Close Group Failures (NEW in 0.7.6)
+      - alert: SaorsaCloseGroupFailures
+        expr: rate(saorsa_close_group_failure_by_type[5m]) > 0.01
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Close group failures detected"
+          description: "Node {{ $labels.instance }} is experiencing close group failures of type {{ $labels.type }} at {{ $value | humanize }}/s"
+
+      # High Eviction Rate (NEW in 0.7.6)
+      - alert: SaorsaHighEvictionRate
+        expr: sum(rate(saorsa_eviction_by_reason[5m])) by (instance) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High node eviction rate"
+          description: "Node {{ $labels.instance }} is evicting nodes at {{ $value | humanize }}/s"

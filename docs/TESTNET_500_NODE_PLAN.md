@@ -3,12 +3,32 @@
 ## Version Information
 
 - **saorsa-node**: v0.1.0
-- **saorsa-core**: v0.7.4
+- **saorsa-core**: v0.7.6
 - **Target**: 500 nodes across 5 Digital Ocean workers
 
-## saorsa-core 0.7.4 Changes Summary
+## saorsa-core 0.7.6 Changes Summary
 
-### Major Features: S/Kademlia Security Production Readiness
+### Major Features: Enhanced Security Metrics & Enforcement
+
+#### New in 0.7.6
+| Feature | Description |
+|---------|-------------|
+| `attestation_challenges_*` | Data attestation challenge tracking (sent/passed/failed) |
+| `trust_threshold_violations_total` | Trust threshold violation counter |
+| `low_trust_nodes_current` | Current count of nodes below trust threshold |
+| `enforcement_mode_strict` | Enforcement mode status (permissive/strict) |
+| `close_group_failure_by_type` | Close group failures categorized by type |
+| `eviction_by_reason` severity | Low trust evictions bucketed (critical/severe/moderate) |
+
+#### New in 0.7.5
+| Feature | Description |
+|---------|-------------|
+| `ip_diversity_rejections_total` | IPv4/IPv6 diversity enforcement rejections |
+| `geographic_diversity_rejections_total` | Geographic diversity enforcement rejections |
+| `nodes_per_region` | Node counts per geographic region |
+| Dynamic per-IP limits | 0.5% of network size formula (max 50 nodes/IP) |
+
+### Major Features (0.7.4): S/Kademlia Security Production Readiness
 
 #### New Security Modules
 | Module | Description |
@@ -20,13 +40,14 @@
 | `data_integrity_monitor.rs` | Continuous data integrity verification |
 | `security_coordinator.rs` | Unified security orchestration |
 
-#### New Metrics System (50+ Prometheus Metrics)
+#### New Metrics System (60+ Prometheus Metrics)
 | Category | Metrics Count | Examples |
 |----------|---------------|----------|
-| Security | 15+ | eclipse_score, sybil_score, collusion_score |
+| Security | 20+ | eclipse_score, sybil_score, collusion_score, attestation_*, diversity_rejections |
 | DHT Health | 12+ | routing_table_size, replication_health, lookup_latency |
-| Trust | 10+ | eigentrust_avg, witness_receipts, interactions |
-| Placement | 10+ | geographic_diversity, load_balance_score, capacity |
+| Trust | 12+ | eigentrust_avg, witness_receipts, interactions, low_trust_nodes, enforcement_mode |
+| Placement | 10+ | geographic_diversity, load_balance_score, capacity, nodes_per_region |
+| Close Group | 6+ | close_group_failure_by_type, validations, consensus_failures |
 
 #### Enhanced S/Kademlia
 - Parallel sibling broadcast validation
@@ -211,6 +232,83 @@
 | `dht_trust_witness_receipts_verified_total` | Increases with operations |
 | `dht_trust_positive_interactions_total` | >> negative_interactions |
 
+### 5.8 IP Diversity Enforcement (NEW in 0.7.5)
+| Test | Description | Pass Criteria |
+|------|-------------|---------------|
+| IPv4 diversity limits | IPv4 nodes limited per IP address | `ip_diversity_rejections_total` increases when exceeding limit |
+| IPv6 diversity limits | IPv6 nodes limited per /64 subnet | Same limits apply across IPv6 subnets |
+| Dynamic scaling | Limits scale with network size | 0.5% formula enforced (max 50 nodes/IP) |
+| Bypass prevention | IPv4 bypass vulnerability closed | No IPv4 exemptions from diversity checks |
+
+| Metric | Healthy Range | Alert Threshold |
+|--------|---------------|-----------------|
+| `ip_diversity_rejections_total` (rate) | < 1/min | > 10/min (possible attack) |
+| Max nodes per IP | ≤ 50 | > 50 (limit breached) |
+
+### 5.9 Geographic Diversity Enforcement (NEW in 0.7.5)
+| Test | Description | Pass Criteria |
+|------|-------------|---------------|
+| Region limits | Max nodes per region enforced | `geographic_diversity_rejections_total` increases for excess |
+| Region tracking | Node counts tracked per region | `nodes_per_region` shows distribution |
+| Multi-region coverage | Network spans multiple regions | At least 3 regions represented |
+| Load balancing | Even distribution across regions | No region > 40% of network |
+
+| Metric | Healthy Range | Alert Threshold |
+|--------|---------------|-----------------|
+| `geographic_diversity_rejections_total` (rate) | < 1/min | > 10/min |
+| `nodes_per_region{region="..."}` | Even distribution | Single region > 40% |
+| Regions covered | ≥ 3 | < 3 regions |
+
+### 5.10 Data Attestation (NEW in 0.7.6)
+| Test | Description | Pass Criteria |
+|------|-------------|---------------|
+| Challenge sending | Attestation challenges sent to nodes | `attestation_challenges_sent_total` increases during refresh |
+| Challenge success | Valid nodes pass attestation | `attestation_challenges_passed_total` > 95% of sent |
+| Challenge failure detection | Invalid/offline nodes fail | `attestation_challenges_failed_total` logged |
+| Failure consequences | Failed nodes tracked/evicted | Correlates with eviction metrics |
+| Challenge frequency | Regular challenge intervals | Challenges sent during routing refresh |
+
+| Metric | Target | Alert Threshold |
+|--------|--------|-----------------|
+| Attestation success rate | > 95% | < 90% |
+| `attestation_challenges_failed_total` (rate) | < 5/min | > 10/min |
+| Challenge coverage | All nodes challenged periodically | < 80% coverage |
+
+### 5.11 Trust Enforcement (NEW in 0.7.6)
+| Test | Description | Pass Criteria |
+|------|-------------|---------------|
+| Trust violations | Low trust nodes flagged | `trust_threshold_violations_total` tracked |
+| Low trust count | Current low trust count accurate | `low_trust_nodes_current` < 10% of network |
+| Severity bucketing | Evictions categorized by severity | `eviction_by_reason{reason="low_trust_*"}` tracked |
+| Critical evictions | Trust < 0.05 marked critical | `eviction_by_reason{reason="low_trust_critical"}` |
+| Severe evictions | Trust 0.05-0.10 marked severe | `eviction_by_reason{reason="low_trust_severe"}` |
+| Moderate evictions | Trust 0.10+ marked moderate | `eviction_by_reason{reason="low_trust_moderate"}` |
+| Enforcement mode toggle | Strict mode activates under threat | `enforcement_mode_strict` = 1 when under attack |
+
+| Metric | Healthy Range | Alert Threshold |
+|--------|---------------|-----------------|
+| `low_trust_nodes_current` | < 5% of network | > 10% of network |
+| `trust_threshold_violations_total` (rate) | < 5/min | > 10/min |
+| `enforcement_mode_strict` | 0 (permissive) | 1 (strict - investigate!) |
+
+### 5.12 Close Group Failure Analysis (NEW in 0.7.6)
+| Test | Description | Pass Criteria |
+|------|-------------|---------------|
+| Failure type breakdown | Failures categorized by type | `close_group_failure_by_type` tracked |
+| NotInCloseGroup | Wrong close group membership detected | Logged when node claims wrong group |
+| LowTrustScore | Trust-based rejection | Correlates with trust violation metrics |
+| InsufficientGeographicDiversity | Geographic diversity failure | Correlates with geo rejection metrics |
+| SuspectedCollusion | Collusion pattern detected | Critical alert triggered |
+| AttackModeTriggered | Attack detection escalation | Correlates with BFT mode |
+
+| Failure Type | Description | Expected Frequency |
+|--------------|-------------|-------------------|
+| `NotInCloseGroup` | Node not in calculated close group | Rare (< 1/hr) |
+| `LowTrustScore` | Node below trust threshold | Occasional during attacks |
+| `InsufficientGeographicDiversity` | Geographic concentration | Occasional |
+| `SuspectedCollusion` | Coordinated behavior detected | Rare (attack indicator) |
+| `AttackModeTriggered` | Security escalation | Rare (critical alert) |
+
 ---
 
 ## Phase 6: Performance Benchmarks
@@ -305,10 +403,12 @@
 | Day 1 | Infrastructure validation (Phase 1) |
 | Day 2 | Network formation + sibling broadcast (Phase 2) |
 | Day 3 | Payment & data operations (Phase 3-4) |
-| Day 4 | Security testing - Sybil, Eclipse (Phase 5.1-5.3) |
-| Day 5 | Security testing - Collusion, BFT, Trust (Phase 5.4-5.7) |
-| Day 6 | Performance benchmarks (Phase 6) |
-| Day 7 | Chaos + adversarial testing (Phase 7) |
+| Day 4 | Security testing - Sybil, Eclipse, Collusion (Phase 5.1-5.4) |
+| Day 5 | Security testing - Close Group, BFT, Trust (Phase 5.5-5.7) |
+| Day 6 | Security testing - IP/Geo Diversity, Attestation (Phase 5.8-5.10) NEW |
+| Day 7 | Security testing - Trust Enforcement, Close Group Analysis (Phase 5.11-5.12) NEW |
+| Day 8 | Performance benchmarks (Phase 6) |
+| Day 9 | Chaos + adversarial testing (Phase 7) |
 
 ---
 
@@ -320,12 +420,18 @@
 - [ ] Payment quotes generated successfully
 - [ ] No memory leaks (stable RSS over 24h)
 - [ ] All security scores < 0.3 (no active attacks)
+- [ ] Attestation success rate > 95%
+- [ ] Low trust nodes < 10% of network
 
 ### Production Readiness
-- [ ] All Phase 1-6 tests pass
+- [ ] All Phase 1-7 tests pass (including new 5.8-5.12)
 - [ ] Chaos engineering tests show recovery
 - [ ] P95 latency < 500ms sustained
 - [ ] Zero critical alerts for 48+ hours
 - [ ] Security dashboard shows all healthy
 - [ ] Trust metrics stable (EigenTrust avg > 0.7)
 - [ ] Adversarial tests detected and recovered
+- [ ] IP/Geographic diversity enforcement active
+- [ ] Enforcement mode remains permissive (0) for 48+ hours
+- [ ] Close group failure analysis shows no collusion patterns
+- [ ] All 60+ metrics reporting correctly
