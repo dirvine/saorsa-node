@@ -16,7 +16,7 @@ use std::time::Duration;
 use tokio::sync::{broadcast, RwLock};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 /// Error type for testnet operations.
 #[derive(Debug, thiserror::Error)]

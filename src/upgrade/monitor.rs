@@ -274,7 +274,7 @@ impl UpgradeMonitor {
             );
             Ok(Some(info))
         } else {
-            let remaining = delay - elapsed;
+            let remaining = delay.saturating_sub(elapsed);
             debug!(
                 "Staged rollout: {}h {}m remaining before upgrade to {}",
                 remaining.as_secs() / 3600,
@@ -300,7 +300,7 @@ impl UpgradeMonitor {
         if elapsed >= delay {
             Some(Duration::ZERO)
         } else {
-            Some(delay - elapsed)
+            Some(delay.saturating_sub(elapsed))
         }
     }
 
