@@ -2,7 +2,8 @@
 
 use clap::{Parser, ValueEnum};
 use saorsa_node::config::{
-    EvmNetworkConfig, IpVersion, NodeConfig, PaymentConfig, UpgradeChannel, UpgradeConfig,
+    EvmNetworkConfig, IpVersion, NetworkMode, NodeConfig, PaymentConfig, UpgradeChannel,
+    UpgradeConfig,
 };
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -70,6 +71,12 @@ pub struct Cli {
     #[arg(long, value_enum, default_value = "info", env = "RUST_LOG")]
     pub log_level: CliLogLevel,
 
+    /// Network mode (production, testnet, or development).
+    /// Testnet mode uses relaxed IP diversity limits suitable for
+    /// single-provider deployments with many nodes per IP.
+    #[arg(long, value_enum, default_value = "production", env = "SAORSA_NETWORK_MODE")]
+    pub network_mode: CliNetworkMode,
+
     /// Path to configuration file.
     #[arg(long, short)]
     pub config: Option<PathBuf>,
@@ -123,6 +130,20 @@ pub enum CliLogLevel {
     Trace,
 }
 
+/// Network mode CLI enum.
+#[derive(Debug, Clone, Copy, ValueEnum, Default)]
+pub enum CliNetworkMode {
+    /// Production mode with full anti-Sybil protection.
+    #[default]
+    Production,
+    /// Testnet mode with relaxed diversity requirements.
+    /// Allows many nodes per IP/ASN for single-provider deployments.
+    Testnet,
+    /// Development mode with minimal restrictions.
+    /// Only use for local testing.
+    Development,
+}
+
 impl Cli {
     /// Convert CLI arguments into a `NodeConfig`.
     ///
@@ -146,6 +167,7 @@ impl Cli {
         config.ip_version = self.ip_version.into();
         config.bootstrap = self.bootstrap;
         config.log_level = self.log_level.into();
+        config.network_mode = self.network_mode.into();
 
         // Upgrade config
         config.upgrade = UpgradeConfig {
@@ -203,6 +225,16 @@ impl From<CliLogLevel> for String {
             CliLogLevel::Info => "info".to_string(),
             CliLogLevel::Debug => "debug".to_string(),
             CliLogLevel::Trace => "trace".to_string(),
+        }
+    }
+}
+
+impl From<CliNetworkMode> for NetworkMode {
+    fn from(mode: CliNetworkMode) -> Self {
+        match mode {
+            CliNetworkMode::Production => Self::Production,
+            CliNetworkMode::Testnet => Self::Testnet,
+            CliNetworkMode::Development => Self::Development,
         }
     }
 }
