@@ -43,6 +43,7 @@ ExecStart=/usr/local/bin/saorsa-node \\
     --root-dir ${NODE_DIR} \\
     --port ${PORT} \\
     --ip-version ipv4 \\
+    --network-mode testnet \\
     -b ${BOOTSTRAP1} \\
     -b ${BOOTSTRAP2} \\
     --metrics-port ${METRICS} \\
