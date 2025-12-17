@@ -225,3 +225,4 @@ proptest-regressions/
 
 # Claude/AI assistant files
 .claude/
+.cache/

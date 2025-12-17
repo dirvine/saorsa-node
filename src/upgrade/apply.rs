@@ -123,7 +123,17 @@ impl AutoApplyUpgrader {
             });
         }
 
-        // Step 3: Extract binary from archive
+        // Step 3: Verify signature on archive BEFORE extraction (security: verify before unpacking)
+        info!("Verifying ML-DSA signature on archive...");
+        if let Err(e) = signature::verify_from_file(&archive_path, &sig_path) {
+            warn!("Signature verification failed: {e}");
+            return Ok(UpgradeResult::RolledBack {
+                reason: format!("Signature verification failed: {e}"),
+            });
+        }
+        info!("Archive signature verified successfully");
+
+        // Step 4: Extract binary from verified archive
         info!("Extracting binary from archive...");
         let extracted_binary = match self.extract_binary(&archive_path, temp_dir.path()) {
             Ok(path) => path,
@@ -134,15 +144,6 @@ impl AutoApplyUpgrader {
                 });
             }
         };
-
-        // Step 4: Verify signature on extracted binary
-        info!("Verifying ML-DSA signature...");
-        if let Err(e) = signature::verify_from_file(&extracted_binary, &sig_path) {
-            warn!("Signature verification failed: {e}");
-            return Ok(UpgradeResult::RolledBack {
-                reason: format!("Signature verification failed: {e}"),
-            });
-        }
 
         // Step 5: Create backup of current binary
         let backup_path = binary_dir.join(format!(
@@ -324,6 +325,7 @@ impl AutoApplyUpgrader {
         {
             // On Windows, we can't replace a running binary
             // Just log and let the user restart manually
+            let _ = binary_path; // Suppress unused warning on Windows
             warn!(
                 "Auto-restart not supported on this platform. Please restart manually."
             );
