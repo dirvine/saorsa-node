@@ -4,8 +4,8 @@
 //!
 //! This crate provides a thin wrapper around `saorsa-core` that adds:
 //! - Auto-upgrade system with ML-DSA signature verification
-//! - ant-node data migration
 //! - CLI interface and configuration
+//! - Content-addressed chunk storage with EVM payment
 //!
 //! ## Architecture
 //!
@@ -14,6 +14,11 @@
 //! - DHT via `TrustWeightedKademlia`
 //! - Trust via `EigenTrustEngine`
 //! - Security via `SecurityManager`
+//!
+//! ## Data Types
+//!
+//! Currently supports a single data type:
+//! - **Chunk**: Immutable content-addressed data (hash(value) == key)
 //!
 //! ## Example
 //!
@@ -39,14 +44,13 @@ pub mod client;
 pub mod config;
 pub mod error;
 pub mod event;
-pub mod migration;
 pub mod node;
 pub mod payment;
 #[cfg(test)]
 mod probe;
 pub mod upgrade;
 
-pub use client::{HybridClient, HybridConfig, HybridStats};
+pub use client::{DataChunk, QuantumClient, QuantumConfig, XorName};
 pub use config::NodeConfig;
 pub use error::{Error, Result};
 pub use event::{NodeEvent, NodeEventsChannel};

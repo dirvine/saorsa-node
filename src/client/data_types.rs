@@ -1,48 +1,51 @@
-//! Unified data type definitions for hybrid client operations.
+//! Data type definitions for chunk storage.
 //!
-//! This module provides a unified view of data types across both the saorsa network
-//! (quantum-resistant) and the legacy autonomi network.
+//! This module provides the core data types for content-addressed chunk storage
+//! on the saorsa network. Chunks are immutable, content-addressed blobs where
+//! the address is the SHA256 hash of the content.
 
 use bytes::Bytes;
-use serde::{Deserialize, Serialize};
 
 /// A content-addressed identifier (32 bytes).
 ///
-/// Used to identify chunks, records, and other content-addressed data.
+/// The address is computed as SHA256(content) for chunks,
+/// ensuring content-addressed storage.
 pub type XorName = [u8; 32];
 
-/// The source network where data was retrieved from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub enum DataSource {
-    /// Data retrieved from the saorsa network (quantum-resistant).
-    #[default]
-    Saorsa,
-    /// Data retrieved from the legacy autonomi network.
-    Autonomi,
-    /// Data retrieved from local cache.
-    Cache,
-}
-
-/// A chunk of data with its address.
+/// A chunk of data with its content-addressed identifier.
+///
+/// Chunks are the fundamental storage unit in saorsa. They are:
+/// - **Immutable**: Content cannot be changed after storage
+/// - **Content-addressed**: Address = SHA256(content)
+/// - **Paid**: Storage requires EVM payment on Arbitrum
 #[derive(Debug, Clone)]
 pub struct DataChunk {
-    /// The content-addressed identifier.
+    /// The content-addressed identifier (SHA256 of content).
     pub address: XorName,
     /// The raw data content.
     pub content: Bytes,
-    /// The source of this data.
-    pub source: DataSource,
 }
 
 impl DataChunk {
     /// Create a new data chunk.
+    ///
+    /// Note: This does NOT verify that address == SHA256(content).
+    /// Use `from_content` for automatic address computation.
     #[must_use]
-    pub fn new(address: XorName, content: Bytes, source: DataSource) -> Self {
-        Self {
-            address,
-            content,
-            source,
-        }
+    pub fn new(address: XorName, content: Bytes) -> Self {
+        Self { address, content }
+    }
+
+    /// Create a chunk from content, computing the address automatically.
+    #[must_use]
+    pub fn from_content(content: Bytes) -> Self {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(&content);
+        let result = hasher.finalize();
+        let mut address = [0u8; 32];
+        address.copy_from_slice(&result);
+        Self { address, content }
     }
 
     /// Get the size of the chunk in bytes.
@@ -50,121 +53,33 @@ impl DataChunk {
     pub fn size(&self) -> usize {
         self.content.len()
     }
-}
 
-/// A scratchpad entry (mutable data).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ScratchpadEntry {
-    /// The owner's public key (32 bytes).
-    pub owner: [u8; 32],
-    /// The content type identifier.
-    pub content_type: u64,
-    /// The encrypted payload.
-    pub payload: Vec<u8>,
-    /// Counter for updates (prevents replay).
-    pub counter: u64,
-    /// The signature over the entry.
-    pub signature: Vec<u8>,
-    /// The source network.
-    #[serde(skip)]
-    pub source: DataSource,
-}
-
-/// A pointer record (points to other data).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PointerRecord {
-    /// The owner's public key (32 bytes).
-    pub owner: [u8; 32],
-    /// The counter for updates.
-    pub counter: u64,
-    /// The target `XorName` this pointer references.
-    pub target: XorName,
-    /// The signature over the record.
-    pub signature: Vec<u8>,
-    /// The source network.
-    #[serde(skip)]
-    pub source: DataSource,
-}
-
-/// A graph entry (linked data structure).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GraphEntry {
-    /// The owner's public key (32 bytes).
-    pub owner: [u8; 32],
-    /// Parent entries this links to.
-    pub parents: Vec<XorName>,
-    /// The content payload.
-    pub content: Vec<u8>,
-    /// Descendant entries (populated on retrieval).
-    pub descendants: Vec<XorName>,
-    /// The source network.
-    #[serde(skip)]
-    pub source: DataSource,
-}
-
-/// Record type enumeration for discovery.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum RecordKind {
-    /// Immutable chunk data.
-    Chunk,
-    /// Mutable scratchpad.
-    Scratchpad,
-    /// Pointer record.
-    Pointer,
-    /// Graph entry.
-    GraphEntry,
-}
-
-/// Result of a lookup operation.
-#[derive(Debug)]
-pub enum LookupResult {
-    /// Data found as a chunk.
-    Chunk(DataChunk),
-    /// Data found as a scratchpad.
-    Scratchpad(ScratchpadEntry),
-    /// Data found as a pointer.
-    Pointer(PointerRecord),
-    /// Data found as a graph entry.
-    GraphEntry(GraphEntry),
-    /// Data not found on any network.
-    NotFound,
-}
-
-impl LookupResult {
-    /// Check if data was found.
+    /// Verify that the address matches SHA256(content).
     #[must_use]
-    pub fn is_found(&self) -> bool {
-        !matches!(self, Self::NotFound)
-    }
-
-    /// Get the data source if found.
-    #[must_use]
-    pub fn source(&self) -> Option<DataSource> {
-        match self {
-            Self::Chunk(c) => Some(c.source),
-            Self::Scratchpad(s) => Some(s.source),
-            Self::Pointer(p) => Some(p.source),
-            Self::GraphEntry(g) => Some(g.source),
-            Self::NotFound => None,
-        }
+    pub fn verify(&self) -> bool {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(&self.content);
+        let result = hasher.finalize();
+        self.address == result.as_slice()
     }
 }
 
-/// Statistics about hybrid operations.
+/// Statistics about chunk operations.
 #[derive(Debug, Default, Clone)]
-pub struct HybridStats {
-    /// Number of lookups from saorsa network.
-    pub saorsa_hits: u64,
-    /// Number of lookups from autonomi network.
-    pub autonomi_hits: u64,
+pub struct ChunkStats {
+    /// Number of chunks stored.
+    pub chunks_stored: u64,
+    /// Number of chunks retrieved.
+    pub chunks_retrieved: u64,
     /// Number of cache hits.
     pub cache_hits: u64,
-    /// Number of misses (not found anywhere).
+    /// Number of misses (not found).
     pub misses: u64,
-    /// Number of writes to saorsa network.
-    pub saorsa_writes: u64,
-    /// Number of migrations from autonomi to saorsa.
-    pub migrations: u64,
+    /// Total bytes stored.
+    pub bytes_stored: u64,
+    /// Total bytes retrieved.
+    pub bytes_retrieved: u64,
 }
 
 #[cfg(test)]
@@ -176,31 +91,39 @@ mod tests {
     fn test_data_chunk_creation() {
         let address = [0xAB; 32];
         let content = Bytes::from("test data");
-        let chunk = DataChunk::new(address, content.clone(), DataSource::Saorsa);
+        let chunk = DataChunk::new(address, content.clone());
 
         assert_eq!(chunk.address, address);
         assert_eq!(chunk.content, content);
-        assert_eq!(chunk.source, DataSource::Saorsa);
         assert_eq!(chunk.size(), 9);
     }
 
     #[test]
-    fn test_lookup_result_is_found() {
-        let chunk = DataChunk::new([0; 32], Bytes::new(), DataSource::Saorsa);
-        let found = LookupResult::Chunk(chunk);
-        let not_found = LookupResult::NotFound;
+    fn test_chunk_from_content() {
+        let content = Bytes::from("hello world");
+        let chunk = DataChunk::from_content(content.clone());
 
-        assert!(found.is_found());
-        assert!(!not_found.is_found());
+        // SHA256 of "hello world"
+        let expected: [u8; 32] = [
+            0xb9, 0x4d, 0x27, 0xb9, 0x93, 0x4d, 0x3e, 0x08, 0xa5, 0x2e, 0x52, 0xd7, 0xda, 0x7d,
+            0xab, 0xfa, 0xc4, 0x84, 0xef, 0xe3, 0x7a, 0x53, 0x80, 0xee, 0x90, 0x88, 0xf7, 0xac,
+            0xe2, 0xef, 0xcd, 0xe9,
+        ];
+
+        assert_eq!(chunk.address, expected);
+        assert_eq!(chunk.content, content);
+        assert!(chunk.verify());
     }
 
     #[test]
-    fn test_lookup_result_source() {
-        let chunk = DataChunk::new([0; 32], Bytes::new(), DataSource::Autonomi);
-        let found = LookupResult::Chunk(chunk);
-        let not_found = LookupResult::NotFound;
+    fn test_chunk_verify() {
+        // Valid chunk
+        let content = Bytes::from("test");
+        let valid = DataChunk::from_content(content);
+        assert!(valid.verify());
 
-        assert_eq!(found.source(), Some(DataSource::Autonomi));
-        assert_eq!(not_found.source(), None);
+        // Invalid chunk (wrong address)
+        let invalid = DataChunk::new([0; 32], Bytes::from("test"));
+        assert!(!invalid.verify());
     }
 }

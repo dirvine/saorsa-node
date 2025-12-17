@@ -1,9 +1,9 @@
-//! Main payment verifier combining autonomi lookup and LRU cache.
+//! Payment verifier with LRU cache and EVM verification.
 //!
 //! This is the core payment verification logic for saorsa-node.
+//! All new data requires EVM payment on Arbitrum (no free tier).
 
 use crate::error::{Error, Result};
-use crate::payment::autonomi_verifier::{AutonomVerifier, AutonomVerifierConfig};
 use crate::payment::cache::{VerifiedCache, XorName};
 use ant_evm::ProofOfPayment;
 use evmlib::Network as EvmNetwork;
@@ -29,43 +29,21 @@ impl Default for EvmVerifierConfig {
 
 /// Configuration for the payment verifier.
 ///
-/// ## Security: Fail-Closed Default
-///
-/// The `require_payment_on_error` field defaults to `true` (fail-closed behavior).
-/// This means that if the autonomi network lookup fails (network issues, timeouts, etc.),
-/// the node will require payment rather than allowing free storage.
-///
-/// This is the secure default because:
-/// - **Prevents abuse**: Attackers cannot exploit network failures to store data for free
-/// - **Economic security**: Ensures payment is always required for new data
-/// - **Fail-safe**: Errs on the side of requiring payment when uncertain
-///
-/// Setting `require_payment_on_error = false` enables fail-open behavior, which is
-/// less secure but may be useful during network instability for better user experience.
-/// **Use fail-open only in controlled environments.**
+/// All new data requires EVM payment on Arbitrum. The cache stores
+/// previously verified payments to avoid redundant on-chain lookups.
 #[derive(Debug, Clone)]
 pub struct PaymentVerifierConfig {
-    /// Autonomi verifier configuration.
-    pub autonomi: AutonomVerifierConfig,
     /// EVM verifier configuration.
     pub evm: EvmVerifierConfig,
     /// Cache capacity (number of `XorName` values to cache).
     pub cache_capacity: usize,
-    /// Whether to require payment on autonomi lookup failure.
-    ///
-    /// **Default: `true` (fail-closed)** - This is the secure default.
-    /// When `true`: Network errors result in `PaymentRequired` status.
-    /// When `false`: Network errors result in `AlreadyPaid` status (less secure).
-    pub require_payment_on_error: bool,
 }
 
 impl Default for PaymentVerifierConfig {
     fn default() -> Self {
         Self {
-            autonomi: AutonomVerifierConfig::default(),
             evm: EvmVerifierConfig::default(),
             cache_capacity: 100_000,
-            require_payment_on_error: true,
         }
     }
 }
@@ -73,9 +51,7 @@ impl Default for PaymentVerifierConfig {
 /// Status returned by payment verification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PaymentStatus {
-    /// Data exists on autonomi - no payment required.
-    AlreadyPaid,
-    /// Data was found in local cache - no payment required.
+    /// Data was found in local cache - previously paid.
     CachedAsVerified,
     /// New data - payment required.
     PaymentRequired,
@@ -84,66 +60,50 @@ pub enum PaymentStatus {
 }
 
 impl PaymentStatus {
-    /// Returns true if the data can be stored (either already paid or payment verified).
+    /// Returns true if the data can be stored (cached or payment verified).
     #[must_use]
     pub fn can_store(&self) -> bool {
-        matches!(
-            self,
-            Self::AlreadyPaid | Self::CachedAsVerified | Self::PaymentVerified
-        )
+        matches!(self, Self::CachedAsVerified | Self::PaymentVerified)
     }
 
     /// Returns true if this status indicates the data was already paid for.
     #[must_use]
-    pub fn is_free(&self) -> bool {
-        matches!(self, Self::AlreadyPaid | Self::CachedAsVerified)
+    pub fn is_cached(&self) -> bool {
+        matches!(self, Self::CachedAsVerified)
     }
 }
 
 /// Main payment verifier for saorsa-node.
 ///
-/// Combines:
+/// Uses:
 /// 1. LRU cache for fast lookups of previously verified `XorName` values
-/// 2. Autonomi network verification for checking if data already exists
-/// 3. EVM payment verification for new data
+/// 2. EVM payment verification for new data (always required)
 pub struct PaymentVerifier {
     /// LRU cache of verified `XorName` values.
     cache: VerifiedCache,
-    /// Autonomi network verifier.
-    autonomi: AutonomVerifier,
     /// Configuration.
     config: PaymentVerifierConfig,
 }
 
 impl PaymentVerifier {
     /// Create a new payment verifier.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the autonomi verifier fails to initialize.
-    pub async fn new(config: PaymentVerifierConfig) -> Result<Self> {
+    #[must_use]
+    pub fn new(config: PaymentVerifierConfig) -> Self {
         let cache = VerifiedCache::with_capacity(config.cache_capacity);
-        let autonomi = AutonomVerifier::new(config.autonomi.clone()).await?;
 
         info!(
-            "Payment verifier initialized (cache_capacity={}, autonomi_enabled={})",
-            config.cache_capacity,
-            autonomi.is_enabled()
+            "Payment verifier initialized (cache_capacity={}, evm_enabled={})",
+            config.cache_capacity, config.evm.enabled
         );
 
-        Ok(Self {
-            cache,
-            autonomi,
-            config,
-        })
+        Self { cache, config }
     }
 
     /// Check if payment is required for the given `XorName`.
     ///
     /// This is the main entry point for payment verification:
     /// 1. Check LRU cache (fast path)
-    /// 2. Query autonomi network
-    /// 3. Return status indicating if payment is needed
+    /// 2. If not cached, payment is required
     ///
     /// # Arguments
     ///
@@ -151,65 +111,38 @@ impl PaymentVerifier {
     ///
     /// # Returns
     ///
-    /// * `PaymentStatus::CachedAsVerified` - Found in local cache (no payment)
-    /// * `PaymentStatus::AlreadyPaid` - Found on autonomi (no payment)
-    /// * `PaymentStatus::PaymentRequired` - Not found (payment required)
-    pub async fn check_payment_required(&self, xorname: &XorName) -> PaymentStatus {
-        // Step 1: Check LRU cache (fast path)
+    /// * `PaymentStatus::CachedAsVerified` - Found in local cache (previously paid)
+    /// * `PaymentStatus::PaymentRequired` - Not cached (payment required)
+    pub fn check_payment_required(&self, xorname: &XorName) -> PaymentStatus {
+        // Check LRU cache (fast path)
         if self.cache.contains(xorname) {
             debug!("Data {} found in verified cache", hex::encode(xorname));
             return PaymentStatus::CachedAsVerified;
         }
 
-        // Step 2: Query autonomi network
-        match self.autonomi.data_exists(xorname).await {
-            Ok(true) => {
-                // Data exists on autonomi - cache it and return AlreadyPaid
-                self.cache.insert(*xorname);
-                info!(
-                    "Data {} exists on autonomi - storing free",
-                    hex::encode(xorname)
-                );
-                PaymentStatus::AlreadyPaid
-            }
-            Ok(false) => {
-                // Data not found - payment required
-                debug!(
-                    "Data {} not found on autonomi - payment required",
-                    hex::encode(xorname)
-                );
-                PaymentStatus::PaymentRequired
-            }
-            Err(e) => {
-                // Network error - decide based on config
-                warn!("Autonomi lookup failed for {}: {}", hex::encode(xorname), e);
-                if self.config.require_payment_on_error {
-                    PaymentStatus::PaymentRequired
-                } else {
-                    // Fail open - allow free storage on error
-                    // This is less secure but more user-friendly during network issues
-                    PaymentStatus::AlreadyPaid
-                }
-            }
-        }
+        // Not in cache - payment required
+        debug!(
+            "Data {} not in cache - payment required",
+            hex::encode(xorname)
+        );
+        PaymentStatus::PaymentRequired
     }
 
-    /// Verify that a PUT request has valid payment or data exists on autonomi.
+    /// Verify that a PUT request has valid payment.
     ///
     /// This is the complete payment verification flow:
-    /// 1. Check if data exists (cache or autonomi)
+    /// 1. Check if data is in cache (previously paid)
     /// 2. If not, verify the provided payment proof
     ///
     /// # Arguments
     ///
     /// * `xorname` - The content-addressed name of the data
-    /// * `payment_proof` - Optional payment proof (required if data doesn't exist)
+    /// * `payment_proof` - Optional payment proof (required if not in cache)
     ///
     /// # Returns
     ///
     /// * `Ok(PaymentStatus)` - Verification succeeded
-    /// * `Err(Error::PaymentRequired)` - No payment and data not found
-    /// * `Err(Error::PaymentInvalid)` - Payment provided but invalid
+    /// * `Err(Error::Payment)` - No payment and not cached, or payment invalid
     ///
     /// # Errors
     ///
@@ -220,11 +153,11 @@ impl PaymentVerifier {
         payment_proof: Option<&[u8]>,
     ) -> Result<PaymentStatus> {
         // First check if payment is required
-        let status = self.check_payment_required(xorname).await;
+        let status = self.check_payment_required(xorname);
 
         match status {
-            PaymentStatus::CachedAsVerified | PaymentStatus::AlreadyPaid => {
-                // No payment needed
+            PaymentStatus::CachedAsVerified => {
+                // No payment needed - already in cache
                 Ok(status)
             }
             PaymentStatus::PaymentRequired => {
@@ -275,12 +208,6 @@ impl PaymentVerifier {
     #[must_use]
     pub fn cache_len(&self) -> usize {
         self.cache.len()
-    }
-
-    /// Check if the autonomi verifier is enabled.
-    #[must_use]
-    pub fn autonomi_enabled(&self) -> bool {
-        self.autonomi.is_enabled()
     }
 
     /// Check if EVM verification is enabled.
@@ -361,48 +288,43 @@ impl PaymentVerifier {
 mod tests {
     use super::*;
 
-    async fn create_test_verifier() -> PaymentVerifier {
+    fn create_test_verifier() -> PaymentVerifier {
         let config = PaymentVerifierConfig {
-            autonomi: AutonomVerifierConfig {
-                enabled: false, // Disabled for tests
-                ..Default::default()
-            },
             evm: EvmVerifierConfig {
                 enabled: false, // Disabled for tests
                 ..Default::default()
             },
             cache_capacity: 100,
-            require_payment_on_error: true,
         };
-        PaymentVerifier::new(config).await.expect("should create")
+        PaymentVerifier::new(config)
     }
 
-    #[tokio::test]
-    async fn test_payment_required_for_new_data() {
-        let verifier = create_test_verifier().await;
+    #[test]
+    fn test_payment_required_for_new_data() {
+        let verifier = create_test_verifier();
         let xorname = [1u8; 32];
 
-        // With autonomi disabled, all data should require payment
-        let status = verifier.check_payment_required(&xorname).await;
+        // All uncached data requires payment
+        let status = verifier.check_payment_required(&xorname);
         assert_eq!(status, PaymentStatus::PaymentRequired);
     }
 
-    #[tokio::test]
-    async fn test_cache_hit() {
-        let verifier = create_test_verifier().await;
+    #[test]
+    fn test_cache_hit() {
+        let verifier = create_test_verifier();
         let xorname = [1u8; 32];
 
         // Manually add to cache
         verifier.cache.insert(xorname);
 
         // Should return CachedAsVerified
-        let status = verifier.check_payment_required(&xorname).await;
+        let status = verifier.check_payment_required(&xorname);
         assert_eq!(status, PaymentStatus::CachedAsVerified);
     }
 
     #[tokio::test]
     async fn test_verify_payment_without_proof() {
-        let verifier = create_test_verifier().await;
+        let verifier = create_test_verifier();
         let xorname = [1u8; 32];
 
         // Should fail without payment proof
@@ -412,7 +334,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_verify_payment_with_proof() {
-        let verifier = create_test_verifier().await;
+        let verifier = create_test_verifier();
         let xorname = [1u8; 32];
 
         // Create a valid (but empty) ProofOfPayment
@@ -430,7 +352,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_verify_payment_cached() {
-        let verifier = create_test_verifier().await;
+        let verifier = create_test_verifier();
         let xorname = [1u8; 32];
 
         // Add to cache
@@ -444,17 +366,15 @@ mod tests {
 
     #[test]
     fn test_payment_status_can_store() {
-        assert!(PaymentStatus::AlreadyPaid.can_store());
         assert!(PaymentStatus::CachedAsVerified.can_store());
         assert!(PaymentStatus::PaymentVerified.can_store());
         assert!(!PaymentStatus::PaymentRequired.can_store());
     }
 
     #[test]
-    fn test_payment_status_is_free() {
-        assert!(PaymentStatus::AlreadyPaid.is_free());
-        assert!(PaymentStatus::CachedAsVerified.is_free());
-        assert!(!PaymentStatus::PaymentVerified.is_free());
-        assert!(!PaymentStatus::PaymentRequired.is_free());
+    fn test_payment_status_is_cached() {
+        assert!(PaymentStatus::CachedAsVerified.is_cached());
+        assert!(!PaymentStatus::PaymentVerified.is_cached());
+        assert!(!PaymentStatus::PaymentRequired.is_cached());
     }
 }

@@ -118,10 +118,6 @@ pub struct NodeConfig {
     #[serde(default)]
     pub upgrade: UpgradeConfig,
 
-    /// Migration configuration.
-    #[serde(default)]
-    pub migration: MigrationConfig,
-
     /// Payment verification configuration.
     #[serde(default)]
     pub payment: PaymentConfig,
@@ -165,18 +161,6 @@ pub struct UpgradeConfig {
     pub staged_rollout_hours: u64,
 }
 
-/// Migration configuration.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct MigrationConfig {
-    /// Auto-detect ant-node data directories.
-    #[serde(default)]
-    pub auto_detect: bool,
-
-    /// Explicit path to ant-node data.
-    #[serde(default)]
-    pub ant_data_path: Option<PathBuf>,
-}
-
 /// EVM network for payment processing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -189,29 +173,18 @@ pub enum EvmNetworkConfig {
 }
 
 /// Payment verification configuration.
+///
+/// All new data requires EVM payment on Arbitrum. The cache stores
+/// previously verified payments to avoid redundant lookups.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PaymentConfig {
-    /// Enable autonomi network verification.
-    /// When enabled, data that exists on autonomi is stored for free.
+    /// Enable payment verification.
     #[serde(default = "default_payment_enabled")]
     pub enabled: bool,
-
-    /// Bootstrap peers for connecting to the autonomi network.
-    #[serde(default)]
-    pub autonomi_bootstrap: Vec<String>,
 
     /// Cache capacity for verified `XorNames`.
     #[serde(default = "default_cache_capacity")]
     pub cache_capacity: usize,
-
-    /// Require payment when autonomi lookup fails (fail closed).
-    /// If false, allows free storage on network errors (fail open).
-    #[serde(default = "default_require_payment_on_error")]
-    pub require_payment_on_error: bool,
-
-    /// Query timeout in seconds for autonomi lookups.
-    #[serde(default = "default_query_timeout")]
-    pub query_timeout_secs: u64,
 
     /// EVM wallet address for receiving payments (e.g., "0x...").
     /// If not set, the node will not be able to receive payments.
@@ -232,10 +205,7 @@ impl Default for PaymentConfig {
     fn default() -> Self {
         Self {
             enabled: default_payment_enabled(),
-            autonomi_bootstrap: Vec::new(),
             cache_capacity: default_cache_capacity(),
-            require_payment_on_error: default_require_payment_on_error(),
-            query_timeout_secs: default_query_timeout(),
             rewards_address: None,
             evm_network: EvmNetworkConfig::default(),
             metrics_port: default_metrics_port(),
@@ -377,14 +347,6 @@ const fn default_cache_capacity() -> usize {
     100_000
 }
 
-const fn default_require_payment_on_error() -> bool {
-    true
-}
-
-const fn default_query_timeout() -> u64 {
-    30
-}
-
 impl Default for NodeConfig {
     fn default() -> Self {
         Self {
@@ -395,7 +357,6 @@ impl Default for NodeConfig {
             network_mode: NetworkMode::default(),
             testnet: TestnetConfig::default(),
             upgrade: UpgradeConfig::default(),
-            migration: MigrationConfig::default(),
             payment: PaymentConfig::default(),
             attestation: AttestationNodeConfig::default(),
             log_level: default_log_level(),

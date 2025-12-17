@@ -24,10 +24,6 @@ pub enum Error {
     #[error("storage error: {0}")]
     Storage(String),
 
-    /// Migration error.
-    #[error("migration error: {0}")]
-    Migration(String),
-
     /// Payment error.
     #[error("payment error: {0}")]
     Payment(String),

@@ -4,7 +4,6 @@ use crate::attestation::VerificationLevel;
 use crate::config::{AttestationMode, AttestationNodeConfig, IpVersion, NetworkMode, NodeConfig};
 use crate::error::{Error, Result};
 use crate::event::{create_event_channel, NodeEvent, NodeEventsChannel, NodeEventsSender};
-use crate::migration::AntDataMigrator;
 use crate::upgrade::{AutoApplyUpgrader, UpgradeMonitor, UpgradeResult};
 use saorsa_core::{
     AttestationConfig as CoreAttestationConfig, EnforcementMode as CoreEnforcementMode,
@@ -70,15 +69,6 @@ impl NodeBuilder {
             None
         };
 
-        // Create migrator if configured
-        let migrator = if let Some(ref path) = self.config.migration.ant_data_path {
-            Some(AntDataMigrator::new(path.clone())?)
-        } else if self.config.migration.auto_detect {
-            AntDataMigrator::auto_detect()?
-        } else {
-            None
-        };
-
         let node = RunningNode {
             config: self.config,
             p2p_node: Arc::new(p2p_node),
@@ -87,7 +77,6 @@ impl NodeBuilder {
             events_tx,
             events_rx: Some(events_rx),
             upgrade_monitor,
-            migrator,
         };
 
         Ok(node)
@@ -283,7 +272,6 @@ pub struct RunningNode {
     events_tx: NodeEventsSender,
     events_rx: Option<NodeEventsChannel>,
     upgrade_monitor: Option<Arc<UpgradeMonitor>>,
-    migrator: Option<AntDataMigrator>,
 }
 
 impl RunningNode {
@@ -328,29 +316,6 @@ impl RunningNode {
         // Emit started event
         if let Err(e) = self.events_tx.send(NodeEvent::Started) {
             warn!("Failed to send Started event: {e}");
-        }
-
-        // Run migration if configured
-        if let Some(ref migrator) = self.migrator {
-            info!("Starting ant-node data migration");
-            match migrator.migrate(&self.events_tx).await {
-                Ok(stats) => {
-                    info!("Migration complete: {} records migrated", stats.migrated);
-                    if let Err(e) = self.events_tx.send(NodeEvent::MigrationComplete {
-                        total: stats.migrated,
-                    }) {
-                        warn!("Failed to send MigrationComplete event: {e}");
-                    }
-                }
-                Err(e) => {
-                    error!("Migration failed: {}", e);
-                    if let Err(send_err) = self.events_tx.send(NodeEvent::Error {
-                        message: format!("Migration failed: {e}"),
-                    }) {
-                        warn!("Failed to send Error event: {send_err}");
-                    }
-                }
-            }
         }
 
         // Start upgrade monitor if enabled

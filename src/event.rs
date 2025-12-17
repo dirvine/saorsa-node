@@ -35,20 +35,6 @@ pub enum NodeEvent {
         address: String,
     },
 
-    /// Migration progress update.
-    MigrationProgress {
-        /// Number of records migrated.
-        migrated: u64,
-        /// Total records to migrate.
-        total: u64,
-    },
-
-    /// Migration completed.
-    MigrationComplete {
-        /// Total records migrated.
-        total: u64,
-    },
-
     /// Upgrade available.
     UpgradeAvailable {
         /// New version.

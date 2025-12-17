@@ -2,8 +2,7 @@
 
 use clap::{Parser, ValueEnum};
 use saorsa_node::config::{
-    EvmNetworkConfig, IpVersion, MigrationConfig, NodeConfig, PaymentConfig, UpgradeChannel,
-    UpgradeConfig,
+    EvmNetworkConfig, IpVersion, NodeConfig, PaymentConfig, UpgradeChannel, UpgradeConfig,
 };
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -29,14 +28,6 @@ pub struct Cli {
     #[arg(long, short, env = "SAORSA_BOOTSTRAP")]
     pub bootstrap: Vec<SocketAddr>,
 
-    /// Path to ant-node data directory to migrate.
-    #[arg(long, env = "SAORSA_MIGRATE_ANT_DATA")]
-    pub migrate_ant_data: Option<PathBuf>,
-
-    /// Auto-detect ant-node data directories for migration.
-    #[arg(long)]
-    pub auto_migrate: bool,
-
     /// Enable automatic upgrades.
     #[arg(long, env = "SAORSA_AUTO_UPGRADE")]
     pub auto_upgrade: bool,
@@ -50,13 +41,9 @@ pub struct Cli {
     )]
     pub upgrade_channel: CliUpgradeChannel,
 
-    /// Disable payment verification (require payment for all data).
+    /// Disable payment verification.
     #[arg(long)]
     pub disable_payment_verification: bool,
-
-    /// Bootstrap peers for connecting to autonomi network (for payment verification).
-    #[arg(long, env = "SAORSA_AUTONOMI_BOOTSTRAP")]
-    pub autonomi_bootstrap: Vec<String>,
 
     /// Cache capacity for verified `XorName` values.
     #[arg(long, default_value = "100000", env = "SAORSA_CACHE_CAPACITY")]
@@ -167,21 +154,13 @@ impl Cli {
             ..config.upgrade
         };
 
-        // Migration config
-        config.migration = MigrationConfig {
-            auto_detect: self.auto_migrate,
-            ant_data_path: self.migrate_ant_data,
-        };
-
         // Payment config
         config.payment = PaymentConfig {
             enabled: !self.disable_payment_verification,
-            autonomi_bootstrap: self.autonomi_bootstrap,
             cache_capacity: self.cache_capacity,
             rewards_address: self.rewards_address,
             evm_network: self.evm_network.into(),
             metrics_port: self.metrics_port,
-            ..config.payment
         };
 
         Ok(config)
